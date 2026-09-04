@@ -1,8 +1,10 @@
 /**
  * useImageImport — the three insertion paths (rail picker, paste, drop) funnel into one
- * importer: db.importImage (downscale + thumb, EXIF-rotated) → an image block sized
+ * importer: db.prepareImage (one decode + the 480px thumb, EXIF-rotated) → an image block sized
  * DEFAULT_IMAGE_W cells at the natural aspect, placed at the drop cell or the first free row
- * below the lowest block. While a file decodes a snapped shimmer placeholder sits where the
+ * below the lowest block. The block lands as soon as the thumb exists — the full-size copy is
+ * encoded and written behind it, so the wait is a decode and not a decode plus two encodes plus
+ * a database round trip. While a file decodes a snapped shimmer placeholder sits where the
  * picture will land. Errors become toasts (too big / not a picture / couldn't read).
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -21,7 +23,12 @@ let seq = 0
 export function useImageImport(session: EditorSession) {
   const [pending, setPending] = useState<PendingImage[]>([])
   const alive = useRef(true)
-  useEffect(() => () => { alive.current = false }, [])
+  // set on mount as well as cleared on unmount: StrictMode runs mount -> cleanup -> mount, and a
+  // flag that is only ever cleared leaves every later import discarding its own block
+  useEffect(() => {
+    alive.current = true
+    return () => { alive.current = false }
+  }, [])
 
   const placeFor = useCallback((at?: { x: number; y: number }, h = 12): { x: number; y: number } => {
     const page = session.page()
@@ -44,9 +51,10 @@ export function useImageImport(session: EditorSession) {
       const spot = placeFor(place)
       setPending(p => [...p, { key, x: spot.x, y: spot.y, w: DEFAULT_IMAGE_W, h: 12 }])
       try {
-        const rec = await db.importImage(file, session.entryId)
+        const draft = await db.prepareImage(file, session.entryId)
+        draft.stored.catch(() => { if (alive.current) useStore.getState().toast(S.editor.image.failed) })
         if (!alive.current) return
-        const block = newImageBlock(rec.id, rec.width, rec.height, placeFor(place, Math.round((DEFAULT_IMAGE_W * rec.height) / Math.max(1, rec.width))))
+        const block = newImageBlock(draft.id, draft.width, draft.height, placeFor(place, Math.round((DEFAULT_IMAGE_W * draft.height) / Math.max(1, draft.width))))
         session.justAdded.add(block.id)
         session.commit(e => addBlock(e, session.pageIndex, block))
         added.push(block.id)
@@ -66,12 +74,13 @@ export function useImageImport(session: EditorSession) {
   const replaceImage = useCallback(async (blockId: Id, file: File) => {
     const st = useStore.getState()
     try {
-      const rec = await db.importImage(file, session.entryId)
+      const draft = await db.prepareImage(file, session.entryId)
+      draft.stored.catch(() => { if (alive.current) useStore.getState().toast(S.editor.image.failed) })
       if (!alive.current) return
       session.commit(e => updateBlock<ImageBlock>(e, session.pageIndex, blockId, b => {
-        const h = Math.max(2, Math.min(CONTENT.rows, Math.round((b.w * rec.height) / Math.max(1, rec.width))))
+        const h = Math.max(2, Math.min(CONTENT.rows, Math.round((b.w * draft.height) / Math.max(1, draft.width))))
         const y = Math.min(b.y, CONTENT_MAX_Y - h)
-        return { ...b, imageId: rec.id, naturalW: rec.width, naturalH: rec.height, h, y, objectPosition: undefined }
+        return { ...b, imageId: draft.id, naturalW: draft.width, naturalH: draft.height, h, y, objectPosition: undefined, objectScale: undefined }
       }))
     } catch (err) {
       if (!alive.current) return

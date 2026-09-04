@@ -230,7 +230,12 @@ export function OpenBook() {
       }
     }
     void run()
-    return () => { alive = false }
+    // The clone-flight branch hides the stage and un-hides it three awaits later; every early
+    // return in between (and StrictMode's discarded first pass, which consumes the handoff before
+    // the real run sees it) would otherwise leave the flag on for good — and with it the flat
+    // layers, so the flip zones, the ribbon and the caption all go dead while the spread, which
+    // re-declares its own visibility, still looks perfectly normal.
+    return () => { alive = false; delete stg.dataset.hidden }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 

@@ -54,8 +54,9 @@ export function CoverInspector({ entryId, anchor }: { entryId: Id; anchor: Rect 
     if (!f || busy) return
     setBusy(true)
     try {
-      const rec = await db.importImage(f, entryId)
-      set({ imageId: rec.id })
+      const draft = await db.prepareImage(f, entryId)
+      draft.stored.catch(err => { console.error(err); useStore.getState().toast(C.notAnImage) })
+      set({ imageId: draft.id })
       sound.snap()
     } catch (err) {
       const s = useStore.getState()

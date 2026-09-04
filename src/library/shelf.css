@@ -22,7 +22,18 @@
   --paper-noise: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='96' height='96'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 .2 0 0 0 0 .15 0 0 0 0 .1 0 0 0 .07 0'/></filter><rect width='96' height='96' filter='url(%23n)'/></svg>");
   --cloth-noise: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='6' height='6'><path d='M0 3h6M3 0v6' stroke='rgba(0,0,0,.09)' stroke-width='1'/></svg>");
   --linen-noise: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4'><path d='M0 2h4' stroke='rgba(255,255,255,.10)' stroke-width='1'/><path d='M2 0v4' stroke='rgba(0,0,0,.06)' stroke-width='1'/></svg>");
-  --page-lines: repeating-linear-gradient(90deg, var(--rule) 0 1px, var(--paper) 1px 2.5px);
+  /* the text block: board thickness, the squares (board overhang past the leaves) and the leaf colour */
+  --board: 2px;
+  --square: 3px;
+  --leaf: color-mix(in srgb, var(--paper) 88%, #cbbfa4);
+  --leaf-lit: color-mix(in srgb, var(--paper) 96%, #fffdf6);
+  /* stacked leaf edges, seen end-on: a fine irregular striation, not a ruled grid */
+  --page-lines: repeating-linear-gradient(90deg,
+    rgba(var(--shadow-ink), 0.30) 0 0.4px,
+    rgba(var(--shadow-ink), 0.06) 0.4px 1px,
+    rgba(255, 255, 255, 0.55) 1px 1.7px,
+    rgba(var(--shadow-ink), 0.13) 1.7px 2.3px,
+    rgba(255, 255, 255, 0.28) 2.3px 3.1px);
   --pill-shadow: 0 2px 8px rgba(var(--shadow-ink), 0.12);
   position: absolute; inset: 0;
   overflow: hidden;
@@ -172,6 +183,9 @@ html[data-theme="dark"] .shelf[data-evening] .shelf__wall {
       calc((1 - var(--pick)) * (var(--pull) * 44px + var(--breathe) * var(--breathe) * 8px - var(--press) * 4px - var(--recede) * 10px) + var(--pick) * 150px)
     )
     rotateY(calc((1 - var(--pick)) * (var(--pull) * -22deg + var(--breathe) * -4deg) + var(--pick) * -90deg))
+    /* tip the head out of the row: the camera is almost level with the shelf, so this is what
+       makes the text block visible at all — hook the top and the leaves come into view. */
+    rotateX(calc((1 - var(--pick)) * var(--pull) * -9deg))
     rotateZ(calc((1 - var(--pick)) * var(--jz)))
     scale(calc(1 - var(--press) * 0.015));
   transition:
@@ -220,6 +234,18 @@ html[data-theme="dark"] .shelf[data-evening] .shelf__wall {
     var(--finish-noise),
     linear-gradient(180deg, var(--bk-cover), var(--bk-cover-2));
 }
+/* headband + tailband: the woven caps at the ends of a sewn spine — the clearest "this is bound
+   paper, not a slab" cue at shelf size, and the only paper visible when a book sits square-on. */
+.book__spine::before, .book__spine::after {
+  content: ''; position: absolute; left: var(--board); right: var(--board); height: 3px;
+  background: repeating-linear-gradient(90deg,
+    var(--leaf-lit) 0 1px, color-mix(in srgb, var(--bk-cover-2) 62%, #000) 1px 2px);
+  border-radius: 1px;
+}
+.book__spine::before { top: 1px; opacity: 0.5; }
+.book__spine::after { bottom: 1px; opacity: 0.4; }
+.book--ghost .book__spine::before, .book--ghost .book__spine::after { display: none; }
+
 /* covers: centred on the spine axis, swung 90deg, pushed back so they span z 0 … -160 */
 .book__cover {
   width: var(--cover-w); height: 100%;
@@ -245,14 +271,37 @@ html[data-theme="dark"] .shelf[data-evening] .shelf__wall {
 }
 .book__title.-band { bottom: 22%; padding: 8px 10px; background: var(--paper); color: var(--fg); border-radius: 2px; }
 .book__title.-plain { left: 0; right: 0; bottom: 0; padding: 36px 12px 14px; color: var(--bk-ink-light); background: linear-gradient(transparent, rgba(0, 0, 0, 0.5)); }
-/* top edge: the page block inset by the 2px boards (no overhang on the spine side), lit from above */
+/* Head of the text block: the leaves seen end-on, recessed between the two boards. The boards and
+   the squares (their overhang past the paper) are painted into this one face rather than modelled,
+   so there is no see-through gap at a grazing angle. x runs across the spine, y runs spine -> fore-edge. */
 .book__top {
   width: var(--spine-w); height: var(--cover-w);
   top: calc(var(--cover-w) / -2);
-  transform: translateZ(calc(var(--cover-w) / -2)) rotateX(-90deg);
-  border: 2px solid var(--bk-cover); border-top: 0;
-  background: linear-gradient(rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0.18)), var(--page-lines);
-  background-clip: padding-box;
+  /* rotateX(+90) so the face's front points up: at -90 it pointed at the plank and was
+     backface-culled, which is why a book on the shelf read as a hollow cover shell. */
+  transform: translateZ(calc(var(--cover-w) / -2)) rotateX(90deg);
+  background:
+    /* the two boards, with the recess shadow the squares cast on the outermost leaves */
+    linear-gradient(90deg,
+      var(--bk-cover-2) 0 var(--board),
+      rgba(var(--shadow-ink), 0.5) var(--board) calc(var(--board) + 1px),
+      rgba(var(--shadow-ink), 0.18) calc(var(--board) + 2px),
+      rgba(var(--shadow-ink), 0) calc(var(--board) + 4px),
+      rgba(var(--shadow-ink), 0) calc(100% - var(--board) - 4px),
+      rgba(var(--shadow-ink), 0.16) calc(100% - var(--board) - 2px),
+      rgba(var(--shadow-ink), 0.46) calc(100% - var(--board) - 1px),
+      var(--bk-cover) calc(100% - var(--board)) 100%),
+    /* spine end (bound, in shadow) -> fore-edge (catches the light); 0deg = bottom-up = spine-out */
+    linear-gradient(0deg,
+      var(--bk-cover-2) 0 var(--board),
+      rgba(var(--shadow-ink), 0.42) var(--board) calc(var(--board) + 1.5px),
+      rgba(var(--shadow-ink), 0.2) 7%,
+      rgba(var(--shadow-ink), 0.03) 22%,
+      rgba(255, 255, 255, 0.16) 74%,
+      rgba(255, 255, 255, 0.3) 96%,
+      rgba(var(--shadow-ink), 0.28) 100%),
+    var(--page-lines),
+    linear-gradient(0deg, var(--leaf), var(--leaf-lit));
 }
 /* the one shadow: a gradient face lying 1px above the plank; grows and darkens with the pull-out */
 .book__shadow {

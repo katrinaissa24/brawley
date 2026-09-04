@@ -51,6 +51,7 @@ function Editor({ entry, pageIndex, routeIndex }: { entry: Entry; pageIndex: num
   const saveState = useStore(s => s.saveState)
   const selection = useStore(s => s.selection)
   const editingId = useStore(s => s.editingBlockId)
+  const cropping = useStore(s => s.croppingBlockId)
   const page = entry.pages[pageIndex]
   const blocks = page.blocks
 
@@ -259,6 +260,7 @@ function Editor({ entry, pageIndex, routeIndex }: { entry: Entry; pageIndex: num
         if (t === titleRef.current) { e.preventDefault(); titleRef.current?.blur(); return }
         if (inEditable && t && root && root.contains(t) && t.isContentEditable) return // TextBody: editing → selected
         if (inEditable) return // another field (search…) owns Esc
+        if (st.croppingBlockId) { e.preventDefault(); st.setCropping(null); return }
         if (st.editingBlockId) { e.preventDefault(); st.setEditing(null); return }
         if (st.selection.length) { e.preventDefault(); st.select([]); return }
         e.preventDefault()
@@ -615,9 +617,14 @@ function Editor({ entry, pageIndex, routeIndex }: { entry: Entry; pageIndex: num
           key={imageSel.id}
           block={imageSel}
           anchor={imgAnchor}
+          reframing={cropping === imageSel.id}
+          onReframe={on => useStore.getState().setCropping(on ? imageSel.id : null)}
           onChange={patch => {
             const id = imageSel.id
-            const coalesce = 'opacity' in patch && Object.keys(patch).length === 1 ? 'image-opacity:' + id : undefined
+            const only = Object.keys(patch).length === 1
+            const coalesce = only && 'opacity' in patch ? 'image-opacity:' + id
+              : only && 'objectScale' in patch ? 'image-frame:' + id
+              : undefined
             session.commit(e => updateBlock(e, session.pageIndex, id, b => ({ ...b, ...patch }) as typeof b), coalesce ? { coalesce } : undefined)
           }}
           onReplace={() => { replaceFor.current = imageSel.id; fileRef.current?.click() }}

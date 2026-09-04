@@ -113,6 +113,9 @@ export class GestureController {
     const block = id ? this.session.block(id) : undefined
     const el = id ? this.session.els.get(id) : undefined
     if (!block || !el || !id) return
+    // while a picture is being reframed, a drag inside it pans the picture (ImageBlock owns that
+    // gesture); the resize handles still move the frame itself
+    if (handle === 'move' && useStore.getState().croppingBlockId === id) return
     e.preventDefault()
     const st = useStore.getState()
     if (!(st.selection.length === 1 && st.selection[0] === id)) st.select([id])

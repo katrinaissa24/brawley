@@ -74,6 +74,8 @@ export interface AppState {
   canRedo: boolean
   selection: Id[]
   editingBlockId: Id | null
+  /** picture whose framing is being adjusted: drags pan inside the frame instead of moving it */
+  croppingBlockId: Id | null
   scale: number
   saveState: 'idle' | 'pending' | 'saving' | 'saved' | 'failed'
   toasts: Toast[]
@@ -104,6 +106,7 @@ export interface AppState {
   redo(): boolean
   select(ids: Id[]): void
   setEditing(id: Id | null): void
+  setCropping(id: Id | null): void
   setScale(s: number): void
   flushSave(): Promise<void>
   toast(message: string, opts?: { undo?: () => void; ms?: number }): number
@@ -164,6 +167,7 @@ export const useStore = create<AppState>()((set, get) => ({
   canRedo: false,
   selection: [],
   editingBlockId: null,
+  croppingBlockId: null,
   scale: 1,
   saveState: 'idle',
   toasts: [],
@@ -203,7 +207,7 @@ export const useStore = create<AppState>()((set, get) => ({
     if (prev.view !== 'shelf' && r.view === 'shelf') {
       set({ lastClosedEntryId: prev.entryId })
     }
-    set({ route: r, activeEntryId: r.view === 'shelf' ? get().activeEntryId : r.entryId, selection: [], editingBlockId: null })
+    set({ route: r, activeEntryId: r.view === 'shelf' ? get().activeEntryId : r.entryId, selection: [], editingBlockId: null, croppingBlockId: null })
     const h = routeToHash(r)
     if (location.hash !== h) history.pushState(null, '', h)
     if (r.view !== 'shelf') {
@@ -365,8 +369,12 @@ export const useStore = create<AppState>()((set, get) => ({
     return true
   },
 
-  select(ids) { set({ selection: ids }) },
+  select(ids) {
+    const c = get().croppingBlockId
+    set({ selection: ids, croppingBlockId: c && ids.length === 1 && ids[0] === c ? c : null })
+  },
   setEditing(id) { set({ editingBlockId: id }) },
+  setCropping(id) { set({ croppingBlockId: id }) },
   setScale(s) { set({ scale: s }) },
   flushSave() { return flush(get, set) },
 
@@ -417,6 +425,6 @@ if (typeof window !== 'undefined') {
     const r = parseHash(location.hash)
     const s = useStore.getState()
     if (r.view !== 'shelf' && !s.entries[r.entryId]) return
-    if (JSON.stringify(r) !== JSON.stringify(s.route)) useStore.setState({ route: r, activeEntryId: r.view === 'shelf' ? s.activeEntryId : r.entryId, selection: [], editingBlockId: null })
+    if (JSON.stringify(r) !== JSON.stringify(s.route)) useStore.setState({ route: r, activeEntryId: r.view === 'shelf' ? s.activeEntryId : r.entryId, selection: [], editingBlockId: null, croppingBlockId: null })
   })
 }
