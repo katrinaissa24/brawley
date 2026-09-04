@@ -40,6 +40,8 @@ export interface TextBlock extends BlockBase {
   html: string // sanitized: p, br, strong, em, u, s, a[href], ul, ol, li
   align?: 'left' | 'center' | 'right'
 }
+/** How the picture is cut out of its frame. 'rect' honours cornerRadius; the rest clip. */
+export type ImageShape = 'rect' | 'circle' | 'heart'
 export interface ImageBlock extends BlockBase {
   type: 'image'
   imageId: Id
@@ -49,12 +51,15 @@ export interface ImageBlock extends BlockBase {
   h: number
   wrapMode: WrapMode
   wrapMargin?: number
+  shape?: ImageShape // default 'rect'
   cornerRadius?: number
   opacity?: number // 0..1 (useful for 'behind')
   objectPosition?: { x: number; y: number } // 0..1 pan inside a cropped frame
+  objectScale?: number // 1..4 zoom inside the frame; default 1
   frame?: 'none' | 'polaroid'
   alt?: string
 }
+export const IMAGE_ZOOM = { min: 1, max: 4 } as const
 export type StickerSource = { type: 'emoji'; char: string } | { type: 'svg'; id: string }
 export interface StickerBlock extends BlockBase {
   type: 'sticker'

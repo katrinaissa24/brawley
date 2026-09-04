@@ -30,7 +30,8 @@
 .ob__sheet {
   position: absolute; left: 0; top: 0; width: var(--page-w); height: var(--page-h);
   transform-origin: 0 50%; transform-style: preserve-3d;
-  transform: translateZ(var(--lift, 0px)) rotateY(var(--a));
+  /* --ax leans the hinge for a corner grab; 0 is exactly rotateY, which is every other case */
+  transform: translateZ(var(--lift, 0px)) rotate3d(var(--ax, 0), 1, 0, var(--a));
   visibility: hidden;
 }
 .ob__sheet[data-live] { visibility: visible; }
@@ -76,6 +77,31 @@
 }
 .ob--notrig .ob__face.-front > .ob__shade { opacity: var(--shade-f, 0); }
 .ob--notrig .ob__face.-back > .ob__shade { opacity: var(--shade-b, 0); }
+
+/* ---------- bend rig: the panels a turning sheet is folded into (see bend.ts) ----------
+   Panels nest, so their leans accumulate towards the fore-edge. Each panel carries its own pair of
+   page slices; the slices are 3D leaves (overflow hidden is allowed there) and the clones inside
+   them must not be back-face culled, since the verso slice is turned to face the other way. */
+.ob__bend { position: absolute; inset: 0; transform-style: preserve-3d; pointer-events: none; }
+.ob__pan {
+  position: absolute; top: 0;
+  transform-origin: 0 50%; transform-style: preserve-3d;
+  will-change: transform;
+}
+.ob__pslice {
+  position: absolute; left: 0; top: 0; overflow: hidden; background: var(--paper);
+  backface-visibility: hidden; -webkit-backface-visibility: hidden;
+}
+.ob__pslice.-back { transform: rotateY(180deg); }
+.ob__pslice .ob__face { backface-visibility: visible; -webkit-backface-visibility: visible; }
+.ob__pslice .ob__num, .ob__pslice .ob__ghost { pointer-events: none; }
+/* The fold shadow ramps across each panel from the value at its inner hinge (--s0) to the value at
+   its outer one (--s1). Consecutive panels share those endpoints, so the curve is continuous and
+   the panel seams do not band; both are 0 at the root hinge, where the un-clipped face takes over. */
+.ob__pshade { position: absolute; inset: 0; pointer-events: none;
+  background: linear-gradient(to right, rgba(var(--shadow-ink), var(--s0, 0)), rgba(var(--shadow-ink), var(--s1, 0))); }
+.ob__pslice.-back > .ob__pshade { /* the verso slice is turned, so its inner hinge is on the right */
+  background: linear-gradient(to left, rgba(var(--shadow-ink), var(--s0, 0)), rgba(var(--shadow-ink), var(--s1, 0))); }
 
 /* cast shadow on the pages beneath (a flat leaf, lifted .6px so it never z-fights the page) */
 .ob__under { position: absolute; top: 0; width: var(--page-w); height: var(--page-h); pointer-events: none;

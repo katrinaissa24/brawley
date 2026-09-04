@@ -1,7 +1,19 @@
 /**
- * Flip controller: owns every 3D variable on the sheets (--a on the sheet + its two shades + the two
- * cast elements of its slot, data-live, data-flipping) and the closed-block thickness. JS-driven in rAF
- * (drag mapping, spring landing, hinge tween); CSS derives shading from --a. React never touches these.
+ * Flip controller: owns every 3D variable on the sheets (--a and --ax on the sheet + its two shades
+ * + the two cast elements of its slot, data-live, data-flipping), the bend rig of a turning sheet
+ * and the closed-block thickness. JS-driven in rAF (drag mapping, spring landing, spring flip);
+ * CSS derives the flat-sheet shading from --a. React never touches these.
+ *
+ * Paper, not plastic. Three things make a turn read as a sheet of paper rather than a hinged card:
+ *   · it bends. A turning sheet is split into four panels hinged spine -> fore-edge (`bend.ts`), and
+ *     the outer three lean back by an amount that follows the sheet's own angular velocity through
+ *     an underdamped spring — so the free edge trails a fast flip, sags when you hold it halfway,
+ *     and flutters once as the page lands.
+ *   · it carries momentum. Every flip is a spring, not a fixed tween: a flick throws the page and it
+ *     lands hard, a slow drag sets it down slowly, and the release velocity decides which way it goes.
+ *   · you can take it by the corner. Grabbing near the head or tail tilts the hinge axis (--ax) so
+ *     that corner leads and the sheet folds diagonally; the tilt decays to zero by the end of the
+ *     turn, because only a rotation about the gutter can leave the page lying flat.
  *
  * Spread model: cur = -1 means the book is closed (cover at 0deg); cur >= 0 is the visible spread.
  * A forward flip turns sheet `target` (the right page's sheet); a backward flip turns sheet `target - 1`.
@@ -13,6 +25,7 @@ import { useMemo } from 'react'
 import { MOTION } from '@/feel/motion'
 import { sound } from '@/feel/sound'
 import { SPRINGS, animateSpring, tween } from '@/feel/spring'
+import { buildBend, releaseBend, writeBend, type BendRig } from './bend'
 import type { SheetEls } from './Sheet'
 
 export type Dir = 1 | -1
@@ -30,20 +43,27 @@ interface Flight {
   landed: boolean
   cancel: (() => void) | null
   extra?: (a: number) => void
+  /** the bending panels of this sheet, while it is in the air */
+  rig: BendRig | null
+  /** where along the head-tail axis the sheet was taken: -1 head, 0 middle, +1 tail */
+  grab: number
 }
 interface Drag { f: Flight; spineX: number; r: number; x0: number; y0: number; pointerId: number; samples: [number, number][] }
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v))
 const D2R = Math.PI / 180
-/** cubic-bezier(0.5, 0, 0.2, 1) — the hinge ease, solved for a tween */
-export function hingeEase(t: number) {
-  if (t <= 0) return 0
-  if (t >= 1) return 1
-  const bx = (u: number) => 3 * 0.5 * u * (1 - u) * (1 - u) + 3 * 0.2 * u * u * (1 - u) + u * u * u
-  const by = (u: number) => 3 * 0 * u * (1 - u) * (1 - u) + 3 * 1 * u * u * (1 - u) + u * u * u
-  let lo = 0, hi = 1, u = t
-  for (let i = 0; i < 18; i++) { u = (lo + hi) / 2; if (bx(u) < t) lo = u; else hi = u }
-  return by(u)
+/** How far a corner grab leans the hinge axis at the deepest point of the turn. */
+const AXIS_TILT = 0.34
+/** Velocity is read over this window, so a pause before letting go really does mean "let it down". */
+const VELOCITY_WINDOW = 110 // ms
+
+/**
+ * A spring that covers its travel in about `ms`, at zeta 0.9 — near-critical, so it arrives with
+ * weight but without a bounce that would drive the page through the block underneath.
+ */
+export function springFor(ms: number) {
+  const w = 4 / ((Math.max(60, ms) / 1000) * 0.9)
+  return { k: w * w, c: 2 * 0.9 * w }
 }
 export const easeOutQuintFn = (t: number) => 1 - Math.pow(1 - t, 5)
 export const hasTrig = typeof CSS !== 'undefined' && !!CSS.supports && CSS.supports('opacity', 'calc(sin(1deg))')
@@ -91,9 +111,17 @@ export class FlipController {
       }
     }
   }
-  private writeAngle(f: Flight, a: number) {
+  private writeAngle(f: Flight, raw: number) {
+    // the page lands against the block: the angle stops at the ends and the bend takes the energy
+    const a = clamp(raw, -180, 0)
     f.a = a
     this.writeVars(f.els, f.unders, a)
+    if (f.rig) {
+      const arc = writeBend(f.rig, a, f.dir, performance.now())
+      // a tilted hinge is only legal mid-turn: at either end nothing but a gutter rotation leaves
+      // the sheet lying flat, so the tilt is scaled by the same arc as the bend
+      if (f.grab) f.els.root.style.setProperty('--ax', (AXIS_TILT * f.grab * Math.sqrt(arc)).toFixed(4))
+    }
     f.extra?.(a)
     if (f.gated && !f.silent) {
       const p = f.dir === 1 ? -a : 180 + a // 0 at start .. 180 at the end of the turn
@@ -127,7 +155,7 @@ export class FlipController {
   private canFlip(dir: Dir, from = this.target) {
     return dir === 1 ? from < this.maxSpread : from > 0
   }
-  private beginFlip(dir: Dir, opts: { silent?: boolean; gated?: boolean; allowCover?: boolean } = {}): Flight | null {
+  private beginFlip(dir: Dir, opts: { silent?: boolean; gated?: boolean; allowCover?: boolean; grab?: number; bend?: boolean } = {}): Flight | null {
     if (!opts.allowCover && !this.canFlip(dir)) return null
     const k = dir === 1 ? this.target : this.target - 1
     const els = this.sheets.get(k)
@@ -137,7 +165,15 @@ export class FlipController {
     if (!unders) return null
     let a = dir === 1 ? 0 : -180
     if (this.peek && this.peek.k === k) { this.peek.cancel(); a = this.peekAngle; this.peek = null }
-    const f: Flight = { k, dir, a, slot, els, unders, silent: !!opts.silent, gated: !!opts.gated, lifted: false, landed: false, cancel: null }
+    // the cover is a board and does not bend; reduced motion and the riffle (too fast to read, and
+    // not worth six clones per sheet) get the flat hinge too
+    const rig = k >= 0 && !MOTION.reduced && opts.bend !== false ? buildBend(els.root) : null
+    const f: Flight = {
+      k, dir, a, slot, els, unders,
+      silent: !!opts.silent, gated: !!opts.gated, lifted: false, landed: false, cancel: null,
+      rig, grab: rig ? (opts.grab ?? 0) : 0,
+    }
+    if (rig) { rig.lastA = a; rig.lastT = 0 }
     els.root.dataset.flipping = String(slot)
     this.inFlight.push(f)
     this.target += dir
@@ -149,8 +185,11 @@ export class FlipController {
   private endFlip(f: Flight, result: 'commit' | 'cancel') {
     f.cancel?.()
     f.cancel = null
+    releaseBend(f.rig)
+    f.rig = null
     delete f.els.root.dataset.flipping
     f.els.root.style.willChange = ''
+    f.els.root.style.removeProperty('--ax')
     this.inFlight.splice(this.inFlight.indexOf(f), 1)
     if (result === 'commit') this.cur += f.dir
     else this.target -= f.dir
@@ -165,22 +204,28 @@ export class FlipController {
   }
   private peekAngle = 0
 
-  /** Programmatic (click / key / silent) flip: hinge tween, sounds at 0 and 72%. */
+  /**
+   * Programmatic (click / key / silent) flip. A spring rather than a tween, with a push to start it:
+   * the page accelerates off the block and decelerates onto the far side, so a nudged page and a
+   * thrown page do not move identically. `ms` picks the stiffness rather than a fixed duration.
+   */
   flip(dir: Dir, opts: { ms?: number; silent?: boolean; allowCover?: boolean; extra?: (a: number) => void } = {}): boolean {
     if (this.drag) return false
     if (!opts.allowCover && !this.canFlip(dir)) return false
     if (this.inFlight.length >= 2) { this.queue.push({ dir, ms: opts.ms, silent: opts.silent }); return true }
-    const f = this.beginFlip(dir, { silent: opts.silent, allowCover: opts.allowCover })
+    const ms = opts.ms ?? 520
+    const f = this.beginFlip(dir, { silent: opts.silent, allowCover: opts.allowCover, bend: ms > 160 })
     if (!f) return false
     f.extra = opts.extra
     const to = dir === 1 ? -180 : 0
-    const ms = opts.ms ?? 520
     if (!opts.silent) sound.pageLift()
+    const from = f.a
     let landed = false
-    f.cancel = tween({
-      from: f.a, to, ms, ease: hingeEase,
-      onFrame: (x, t) => {
+    f.cancel = animateSpring({
+      from, to, v0: (to - from) * 1.2, spring: springFor(ms), epsilon: 0.05,
+      onFrame: x => {
         this.writeAngle(f, x)
+        const t = Math.abs(x - from) / Math.max(1, Math.abs(to - from))
         if (!landed && t >= 0.72) { landed = true; if (!opts.silent) sound.pageLand(1, Math.min(1.4, Math.max(0.6, ms / 520))) }
       },
       onDone: () => { if (!landed && !opts.silent) sound.pageLand(); this.endFlip(f, 'commit') },
@@ -252,12 +297,16 @@ export class FlipController {
   onPointerDown(e: PointerEvent, dir: Dir, scene: HTMLElement) {
     if (e.button !== 0 || this.drag || this.inFlight.length) return
     if (!this.canFlip(dir) || !this.book) return
-    const f = this.beginFlip(dir, { gated: true })
+    const rect = this.book.getBoundingClientRect()
+    // where along the head-tail axis the page was taken: the outer thirds count as corners, and a
+    // corner grab leans the hinge so that corner leads the fold
+    const mid = rect.top + rect.height / 2
+    const grab = clamp(((e.clientY - mid) / Math.max(1, rect.height / 2)) * 1.5, -1, 1)
+    const f = this.beginFlip(dir, { gated: true, grab: Math.abs(grab) > 0.34 ? grab : 0 })
     if (!f) return
     scene.setPointerCapture(e.pointerId)
-    const rect = this.book.getBoundingClientRect()
     const spineX = rect.left
-    const r = Math.max(40, Math.abs(e.clientX - spineX))
+    const r = Math.max(40, Math.hypot(e.clientX - spineX, (e.clientY - mid) * 0.35))
     this.drag = { f, spineX, r, x0: e.clientX, y0: e.clientY, pointerId: e.pointerId, samples: [[e.timeStamp, f.a]] }
   }
   onPointerMove(e: PointerEvent) {
@@ -268,7 +317,8 @@ export class FlipController {
     const a = f.dir === 1 ? fwd(e.clientX) : -180 - fwd(2 * spineX - e.clientX)
     this.writeAngle(f, a)
     d.samples.push([e.timeStamp, a])
-    if (d.samples.length > 4) d.samples.shift()
+    // keep a real time window rather than a fixed number of moves, so holding still reads as still
+    while (d.samples.length > 2 && e.timeStamp - d.samples[0][0] > VELOCITY_WINDOW) d.samples.shift()
   }
   onPointerUp(e: PointerEvent, scene: HTMLElement) {
     const d = this.drag
@@ -276,27 +326,42 @@ export class FlipController {
     this.drag = null
     try { scene.releasePointerCapture(e.pointerId) } catch { /* already released */ }
     const { f, samples } = d
-    const [t0, a0] = samples[0], [t1, a1] = samples[samples.length - 1]
-    const v = t1 > t0 ? ((a1 - a0) / (t1 - t0)) * 1000 : 0 // deg/s
+    const [t0, a0] = samples[0]
+    const [t1, a1] = samples[samples.length - 1]
+    // a pause before release ages the sample out of the window and the page is simply set down
+    const stale = e.timeStamp - t1 > VELOCITY_WINDOW
+    const v = !stale && t1 > t0 ? ((a1 - a0) / (t1 - t0)) * 1000 : 0 // deg/s
     const end = f.dir === 1 ? -180 : 0
     const rest = f.dir === 1 ? 0 : -180
     if (Math.hypot(e.clientX - d.x0, e.clientY - d.y0) < 6 && Math.abs(f.a - rest) < 8) {
-      // a plain click on the edge: animated flip from here
+      // a plain click on the edge: spring it over from here
       f.gated = false
-      const ms = 520
       let landed = false
       sound.pageLift()
-      f.cancel = tween({ from: f.a, to: end, ms, ease: hingeEase,
-        onFrame: (x, t) => { this.writeAngle(f, x); if (!landed && t >= 0.72) { landed = true; sound.pageLand() } },
-        onDone: () => this.endFlip(f, 'commit') })
+      const from = f.a
+      f.cancel = animateSpring({
+        from, to: end, v0: (end - from) * 1.2, spring: springFor(520), epsilon: 0.05,
+        onFrame: x => {
+          this.writeAngle(f, x)
+          const t = Math.abs(x - from) / Math.max(1, Math.abs(end - from))
+          if (!landed && t >= 0.72) { landed = true; sound.pageLand() }
+        },
+        onDone: () => { if (!landed) sound.pageLand(); this.endFlip(f, 'commit') },
+      })
       return
     }
     const progress = f.dir === 1 ? -f.a : 180 + f.a
     const toward = f.dir === 1 ? -v : v
-    const commit = progress > 55 || toward > 250
+    // past halfway it goes over unless you are pulling it back; a flick carries it from anywhere
+    const commit = toward > 240 ? true : toward < -240 ? false : progress > 55
     const to = commit ? end : rest
+    // the throw keeps its speed: a hard flick lands hard, a slow release is set down gently
+    const fast = Math.min(1, Math.abs(v) / 900)
+    const spring = commit
+      ? { k: SPRINGS.flipLand.k * (1 + fast * 1.6), c: SPRINGS.flipLand.c * (1 + fast * 0.5) }
+      : SPRINGS.gentle
     f.cancel = animateSpring({
-      from: f.a, to, v0: v, spring: commit ? SPRINGS.flipLand : SPRINGS.gentle, epsilon: 0.05,
+      from: f.a, to, v0: v, spring, epsilon: 0.05,
       onFrame: x => this.writeAngle(f, x),
       onDone: () => this.endFlip(f, commit ? 'commit' : 'cancel'),
     })
@@ -320,7 +385,7 @@ export class FlipController {
   }
 
   dispose() {
-    for (const f of this.inFlight) f.cancel?.()
+    for (const f of this.inFlight) { f.cancel?.(); releaseBend(f.rig); f.rig = null }
     this.inFlight = []
     this.queue = []
     this.peek?.cancel()

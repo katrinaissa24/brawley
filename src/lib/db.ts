@@ -6,6 +6,7 @@ import { openDB, type DBSchema, type IDBPDatabase } from 'idb'
 import { useEffect, useState } from 'react'
 import type { Entry, ExportFile, Id, StoredImage } from '@/model/types'
 import { nanoid } from './ids'
+import { readImageSize } from './imageSize'
 
 interface FolioDB extends DBSchema {
   entries: { key: Id; value: Entry; indexes: { byDate: string } }
@@ -29,9 +30,19 @@ function open() {
   return dbp
 }
 
-/* ---------- image pipeline ---------- */
+/* ---------- image pipeline ----------
+ * Import is split so nothing the user waits on is behind an encode. prepareImage() takes the
+ * display size from the file header, publishes the original blob under both quality slots and
+ * returns — the block is placed and the picture painted straight away. The decode, the 480px thumb,
+ * the full-size copy and the IndexedDB write all run behind the picture already on screen, each
+ * taking over its slot as it lands. Only if the header is unreadable does it fall back to decoding
+ * first. Nothing waits on the write.
+ */
 const MAX_SIDE = 2048
 const THUMB_SIDE = 480
+/** below this, an already-small source is stored untouched — no re-encode at all (the common case) */
+const KEEP_ORIGINAL_BYTES = 4 * 1024 * 1024
+const KEEPABLE = /^image\/(jpeg|png|webp|gif|avif)$/
 
 async function decode(file: Blob): Promise<ImageBitmap> {
   try {
@@ -59,6 +70,39 @@ async function scaled(bmp: ImageBitmap, maxSide: number, type: string, quality: 
   const ctx = c.getContext('2d') as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D
   ctx.drawImage(bmp, 0, 0, w, h)
   return { blob: await toBlob(c, type, quality), w, h }
+}
+
+/** WebP encodes an order of magnitude faster than PNG and keeps alpha; PNG is the fallback. */
+let webp: boolean | null = null
+function canWebp() {
+  if (webp === null) {
+    try {
+      const c = document.createElement('canvas')
+      c.width = c.height = 1
+      webp = c.toDataURL('image/webp').startsWith('data:image/webp')
+    } catch { webp = false }
+  }
+  return webp
+}
+/** Full-size copy: the original blob when it is already small enough, otherwise one re-encode. */
+async function fullCopy(file: Blob, bmp: ImageBitmap) {
+  const fits = bmp.width <= MAX_SIDE && bmp.height <= MAX_SIDE
+  if (fits && file.size <= KEEP_ORIGINAL_BYTES && KEEPABLE.test(file.type)) {
+    // untouched: no encode, and an animated GIF keeps animating
+    return { blob: file, w: bmp.width, h: bmp.height }
+  }
+  const alpha = file.type === 'image/png' || file.type === 'image/webp' || file.type === 'image/avif'
+  const type = alpha ? (canWebp() ? 'image/webp' : 'image/png') : 'image/jpeg'
+  return scaled(bmp, MAX_SIDE, type, 0.86)
+}
+
+export interface ImageDraft {
+  id: Id
+  /** EXIF-corrected pixel size of the source — the aspect the block is laid out at */
+  width: number
+  height: number
+  /** resolves once the full-size copy is persisted; rejects if encoding or the write fails */
+  stored: Promise<StoredImage>
 }
 
 export class ImageTooLargeError extends Error {}
@@ -92,33 +136,63 @@ export const db = {
     const d = await open()
     await d.put('kv', value, key)
   },
-  /** Downscale (≤2048px, EXIF-rotated) + 480px thumb, store, return the record. */
-  async importImage(file: Blob, entryId: Id): Promise<StoredImage> {
+  /**
+   * Returns as soon as the display size is known — from the file header if it can be read, which
+   * costs a 64KB slice rather than a full decode of a 12MP photo. `id` is displayable immediately
+   * (the original is primed into both quality slots); `stored` resolves once the processed copies
+   * are in IndexedDB and have taken those slots over. Callers place the block on the draft and
+   * never await `stored` — only its rejection matters.
+   */
+  async prepareImage(file: Blob, entryId: Id): Promise<ImageDraft> {
     if (!file.type.startsWith('image/')) throw new NotAnImageError('not an image')
     if (file.size > 25 * 1024 * 1024) throw new ImageTooLargeError('too large')
-    const bmp = await decode(file)
-    const keepPng = file.type === 'image/png' || file.type === 'image/gif' || file.type === 'image/webp'
-    // encode full + thumb concurrently — the actual pixel encode runs off the JS thread in the browser's
-    // codec, so awaiting them one at a time serializes work that could otherwise overlap
-    const [full, thumb] = await Promise.all([
-      scaled(bmp, MAX_SIDE, keepPng ? 'image/png' : 'image/jpeg', 0.86),
-      scaled(bmp, THUMB_SIDE, 'image/jpeg', 0.8),
-    ])
-    bmp.close?.()
-    const rec: StoredImage = {
-      id: nanoid(12),
-      entryId,
-      blob: full.blob,
-      thumb: thumb.blob,
-      mime: full.blob.type,
-      width: full.w,
-      height: full.h,
-      bytes: full.blob.size,
-      createdAt: Date.now(),
+    const id = nanoid(12)
+    const head = await readImageSize(file)
+    // the original is a valid picture for both slots until the processed copies exist
+    let early: ImageBitmap | null = null
+    if (head) {
+      imageUrls.prime(id, 'thumb', file)
+      imageUrls.prime(id, 'full', file)
+    } else {
+      early = await decode(file)
     }
-    const d = await open()
-    await d.put('images', rec)
-    return rec
+    const size = head ?? { width: early!.width, height: early!.height }
+    // hold both slots until the record exists, so a release can't revoke them before the write
+    void imageUrls.acquire(id, 'thumb')
+    void imageUrls.acquire(id, 'full')
+    const stored = (async () => {
+      let bmp = early
+      try {
+        if (!bmp) bmp = await decode(file)
+        const thumb = await scaled(bmp, THUMB_SIDE, 'image/jpeg', 0.8)
+        imageUrls.prime(id, 'thumb', thumb.blob)
+        const full = await fullCopy(file, bmp)
+        const rec: StoredImage = {
+          id,
+          entryId,
+          blob: full.blob,
+          thumb: thumb.blob,
+          mime: full.blob.type,
+          width: full.w,
+          height: full.h,
+          bytes: full.blob.size,
+          createdAt: Date.now(),
+        }
+        const d = await open()
+        await d.put('images', rec)
+        imageUrls.prime(id, 'full', full.blob)
+        return rec
+      } finally {
+        bmp?.close?.()
+        imageUrls.release(id, 'thumb')
+        imageUrls.release(id, 'full')
+      }
+    })()
+    return { id, width: size.width, height: size.height, stored }
+  },
+  /** prepareImage, awaited to completion. Kept for callers that need the persisted record. */
+  async importImage(file: Blob, entryId: Id): Promise<StoredImage> {
+    return (await db.prepareImage(file, entryId)).stored
   },
   async putImage(rec: StoredImage) {
     const d = await open()
@@ -196,15 +270,24 @@ function base64ToBlob(b64: string, mime: string): Blob {
   return new Blob([arr], { type: mime })
 }
 
-/* ---------- object URL cache (ref-counted, 30s grace revoke) ---------- */
+/* ---------- object URL cache (ref-counted, 30s grace revoke) ----------
+ * prime() puts a blob in the cache before it is in IndexedDB, so a freshly imported picture paints
+ * without a read-back, and lets the full-size copy replace the thumb when it finishes encoding.
+ * Subscribers are re-read on prime; the previous URL is revoked late so nothing blanks mid-swap. */
 type Q = 'full' | 'thumb'
 const cache = new Map<string, { url: Promise<string>; refs: number; timer: number }>()
+const watchers = new Set<(key: string) => void>()
 export const imageUrls = {
   acquire(id: Id, q: Q = 'full'): Promise<string> {
     const key = `${id}:${q}`
     let c = cache.get(key)
     if (!c) {
-      const url = db.getImageBlob(id, q).then(b => (b ? URL.createObjectURL(b) : ''))
+      // a miss is not cached: the record may simply not be written yet
+      const url = db.getImageBlob(id, q).then(b => {
+        if (b) return URL.createObjectURL(b)
+        if (cache.get(key) === c) cache.delete(key)
+        return ''
+      })
       c = { url, refs: 0, timer: 0 }
       cache.set(key, c)
     }
@@ -219,24 +302,49 @@ export const imageUrls = {
     c.refs--
     if (c.refs <= 0) {
       c.timer = window.setTimeout(() => {
-        cache.delete(key)
+        if (cache.get(key) === c) cache.delete(key)
         void c.url.then(u => u && URL.revokeObjectURL(u))
       }, 30000)
     }
+  },
+  /** Publish a blob under (id, q) now, keeping the outstanding ref count, and wake subscribers. */
+  prime(id: Id, q: Q, blob: Blob) {
+    const key = `${id}:${q}`
+    const prev = cache.get(key)
+    if (prev) {
+      window.clearTimeout(prev.timer)
+      const old = prev.url
+      window.setTimeout(() => void old.then(u => u && URL.revokeObjectURL(u)), 10000)
+    }
+    cache.set(key, { url: Promise.resolve(URL.createObjectURL(blob)), refs: prev?.refs ?? 0, timer: 0 })
+    for (const w of watchers) w(key)
+  },
+  subscribe(fn: (key: string) => void) {
+    watchers.add(fn)
+    return () => { watchers.delete(fn) }
   },
   clear() {
     for (const c of cache.values()) void c.url.then(u => u && URL.revokeObjectURL(u))
     cache.clear()
   },
 }
-/** React hook: object URL for a stored image ('' while loading). */
+/** React hook: object URL for a stored image ('' while loading; re-reads when the blob is primed). */
 export function useImageUrl(id: Id | undefined, q: Q = 'full'): string {
   const [url, setUrl] = useState('')
   useEffect(() => {
     if (!id) { setUrl(''); return }
     let alive = true
-    void imageUrls.acquire(id, q).then(u => alive && setUrl(u))
-    return () => { alive = false; imageUrls.release(id, q) }
+    let held = false
+    const load = () => {
+      const p = imageUrls.acquire(id, q)
+      if (held) imageUrls.release(id, q) // swap the hold onto the current entry, never through 0
+      held = true
+      void p.then(u => { if (alive) setUrl(u) })
+    }
+    load()
+    const key = `${id}:${q}`
+    const off = imageUrls.subscribe(k => { if (k === key && alive) load() })
+    return () => { alive = false; off(); if (held) imageUrls.release(id, q) }
   }, [id, q])
   return url
 }

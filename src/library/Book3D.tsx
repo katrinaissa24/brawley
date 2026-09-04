@@ -1,8 +1,10 @@
 /**
  * Book3D — one closed 5-face box driven entirely by CSS variables. Memoized; never re-renders on
  * scroll or hover (the shelf writes data-hover / --breathe / --pick on the element through the registry).
- * Faces: spine (z = 0, faces the camera), front cover (x = spine-w side), back cover (x = 0 side),
- * top edge (y = 0), and one radial-gradient shadow face lying on the plank. The box extends from
+ * Faces: spine (z = 0, faces the camera; its ::before/::after are the head and tail bands),
+ * front cover (x = spine-w side), back cover (x = 0 side), the head of the text block (y = 0 — the
+ * leaves seen end-on, with the boards and their squares painted into the same face so there is no
+ * see-through gap), and one radial-gradient shadow face lying on the plank. The box extends from
  * z = 0 back to z = -160 (BOOK.depth). No opacity / box-shadow / filter on the root, ever.
  */
 import { memo, type CSSProperties } from 'react'
