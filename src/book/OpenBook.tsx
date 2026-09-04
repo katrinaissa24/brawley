@@ -356,8 +356,9 @@ export function OpenBook() {
   }
   const onSceneClick = (e: React.MouseEvent) => {
     // pointer capture during a flip retargets the compat click to the scene; only a real background press closes
-    if (e.target === scene.current && downOnScene.current && phase === 'open' && !bookRegistry.editorActive) useStore.getState().back()
+    const bg = e.target === scene.current && downOnScene.current
     downOnScene.current = false
+    if (bg && phase === 'open' && !bookRegistry.editorActive) useStore.getState().back()
     else if (menu && !(e.target as HTMLElement).closest('.ob__menu')) setMenu(null)
   }
 
