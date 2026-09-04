@@ -67,6 +67,8 @@ export function OpenBook() {
   const ctl = useFlipController()
 
   const scene = useRef<HTMLDivElement>(null)
+
+  const downOnScene = useRef(false)
   const stage = useRef<HTMLDivElement>(null)
   const book = useRef<HTMLDivElement>(null)
   const blockL = useRef<HTMLDivElement>(null)
@@ -353,7 +355,9 @@ export function OpenBook() {
     ctl.onPointerDown(e.nativeEvent, dir, scene.current!)
   }
   const onSceneClick = (e: React.MouseEvent) => {
-    if (e.target === scene.current && phase === 'open' && !bookRegistry.editorActive) useStore.getState().back()
+    // pointer capture during a flip retargets the compat click to the scene; only a real background press closes
+    if (e.target === scene.current && downOnScene.current && phase === 'open' && !bookRegistry.editorActive) useStore.getState().back()
+    downOnScene.current = false
     else if (menu && !(e.target as HTMLElement).closest('.ob__menu')) setMenu(null)
   }
 
@@ -416,6 +420,7 @@ export function OpenBook() {
       role="region"
       aria-label={S.book.a11y.scene}
       onClick={onSceneClick}
+      onPointerDownCapture={e => { downOnScene.current = e.target === scene.current }}
     >
       <div ref={stage} className="ob__stage"
         onPointerEnter={() => scene.current && (scene.current.dataset.hover = '')}
