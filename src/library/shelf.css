@@ -1,0 +1,432 @@
+/* Folio shelf — 3D books on a plank. Tokens only; classes prefixed shelf- / book. */
+
+/* Numeric drivers of the one book transform. Transitions live on these vars, never on `transform`,
+   so JS can write --pick per frame (pickup spring) and keyframes can animate --dip (detent bump). */
+@property --pull { syntax: '<number>'; inherits: true; initial-value: 0; }
+@property --breathe { syntax: '<number>'; inherits: false; initial-value: 0; }
+@property --press { syntax: '<number>'; inherits: false; initial-value: 0; }
+@property --dip { syntax: '<number>'; inherits: false; initial-value: 0; }
+@property --lift { syntax: '<number>'; inherits: false; initial-value: 0; }
+@property --recede { syntax: '<number>'; inherits: false; initial-value: 0; }
+@property --pick { syntax: '<number>'; inherits: false; initial-value: 0; }
+@property --bk-cover { syntax: '<color>'; inherits: true; initial-value: #c15f3c; }
+@property --bk-cover-2 { syntax: '<color>'; inherits: true; initial-value: #9a4a2e; }
+@property --bk-ink { syntax: '<color>'; inherits: true; initial-value: #f4efe6; }
+
+.shelf {
+  --book-h: 240px;
+  --cover-w: 160px;
+  --plank-h: 18px;
+  --shelf-y: calc(50% + 128px);
+  --shelf-wall: var(--wall);
+  --paper-noise: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='96' height='96'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 .2 0 0 0 0 .15 0 0 0 0 .1 0 0 0 .07 0'/></filter><rect width='96' height='96' filter='url(%23n)'/></svg>");
+  --cloth-noise: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='6' height='6'><path d='M0 3h6M3 0v6' stroke='rgba(0,0,0,.09)' stroke-width='1'/></svg>");
+  --linen-noise: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4'><path d='M0 2h4' stroke='rgba(255,255,255,.10)' stroke-width='1'/><path d='M2 0v4' stroke='rgba(0,0,0,.06)' stroke-width='1'/></svg>");
+  --page-lines: repeating-linear-gradient(90deg, var(--rule) 0 1px, var(--paper) 1px 2.5px);
+  --pill-shadow: 0 2px 8px rgba(var(--shadow-ink), 0.12);
+  position: absolute; inset: 0;
+  overflow: hidden;
+  background: var(--shelf-wall);
+  color: var(--fg);
+  user-select: none;
+  -webkit-user-select: none;
+}
+.shelf[data-evening] { --shelf-wall: color-mix(in srgb, var(--wall) 96%, var(--wood-edge)); }
+
+/* ---------- scroller / track / stage ---------- */
+.shelf__scroller {
+  position: absolute; inset: 0;
+  overflow-x: auto; overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  scroll-behavior: auto;
+  cursor: default;
+}
+.shelf__scroller::-webkit-scrollbar { display: none; }
+.shelf[data-receded] .shelf__scroller, .shelf[data-away] .shelf__scroller { pointer-events: none; }
+.shelf__track { position: relative; height: 100%; width: calc(var(--row-w, 0px) + 100%); }
+.shelf__stage {
+  position: sticky; left: 0; top: 0;
+  width: var(--vw, 100vw); height: 100%;
+  perspective: 1400px; perspective-origin: 50% 30%;
+  transform: scale(1); transform-origin: 50% 50%;
+  transition: transform 300ms var(--ease-out);
+}
+.shelf[data-receded] .shelf__stage { transform: scale(0.96); transition: transform 420ms cubic-bezier(0.16, 1, 0.3, 1); }
+
+/* the wall: flat and static; the shadow band under the row and the lip shadow are baked in */
+.shelf__wall {
+  position: absolute; inset: 0;
+  background:
+    linear-gradient(to bottom,
+      transparent calc(var(--shelf-y) - 300px),
+      rgba(var(--shadow-ink), 0.05) calc(var(--shelf-y) - 120px),
+      rgba(var(--shadow-ink), 0.13) calc(var(--shelf-y) - 4px),
+      rgba(var(--shadow-ink), 0.16) var(--shelf-y),
+      rgba(var(--shadow-ink), 0.24) calc(var(--shelf-y) + var(--plank-h)),
+      rgba(var(--shadow-ink), 0.07) calc(var(--shelf-y) + var(--plank-h) + 34px),
+      transparent calc(var(--shelf-y) + var(--plank-h) + 120px)),
+    radial-gradient(120% 60% at 50% -10%, rgba(255, 255, 255, 0.35), transparent 60%),
+    var(--shelf-wall);
+}
+html[data-theme="dark"] .shelf__wall {
+  background:
+    linear-gradient(to bottom,
+      transparent calc(var(--shelf-y) - 300px),
+      rgba(0, 0, 0, 0.12) calc(var(--shelf-y) - 120px),
+      rgba(0, 0, 0, 0.3) var(--shelf-y),
+      rgba(0, 0, 0, 0.42) calc(var(--shelf-y) + var(--plank-h)),
+      rgba(0, 0, 0, 0.1) calc(var(--shelf-y) + var(--plank-h) + 34px),
+      transparent calc(var(--shelf-y) + var(--plank-h) + 120px)),
+    var(--shelf-wall);
+}
+/* evening in the dark theme: a lamp glow at the top edge instead of a warmer wall */
+html[data-theme="dark"] .shelf[data-evening] { --shelf-wall: var(--wall); }
+html[data-theme="dark"] .shelf[data-evening] .shelf__wall {
+  background:
+    radial-gradient(60% 40% at 50% 0%, color-mix(in srgb, var(--wood-edge) 22%, transparent), transparent 70%),
+    linear-gradient(to bottom,
+      transparent calc(var(--shelf-y) - 300px),
+      rgba(0, 0, 0, 0.12) calc(var(--shelf-y) - 120px),
+      rgba(0, 0, 0, 0.3) var(--shelf-y),
+      rgba(0, 0, 0, 0.42) calc(var(--shelf-y) + var(--plank-h)),
+      rgba(0, 0, 0, 0.1) calc(var(--shelf-y) + var(--plank-h) + 34px),
+      transparent calc(var(--shelf-y) + var(--plank-h) + 120px)),
+    var(--shelf-wall);
+}
+
+/* the three moving layers: row (3D), hits (flat), labels (flat). Only these carry permanent will-change. */
+.shelf__row { position: absolute; inset: 0; transform-style: preserve-3d; will-change: transform; }
+.shelf__hits { position: absolute; inset: 0; will-change: transform; touch-action: pan-x; outline: none; }
+.shelf__hits[data-dragging] { cursor: grabbing; }
+.shelf__hits[data-dragging] .shelf__hit { cursor: grabbing; }
+.shelf__labels { position: absolute; inset: 0; pointer-events: none; will-change: transform; }
+
+/* ---------- plank (windowed 1200px segments, children of the row) ----------
+   Surface: y = --shelf-y, spans z 0 … -180 (rotateX(-90deg) so the normal points up).
+   Lip: the vertical front edge at z = 0, flush with the spines. */
+.shelf__plank, .shelf__lip {
+  position: absolute; left: 50%; width: 1201px;
+  backface-visibility: hidden; -webkit-backface-visibility: hidden;
+}
+.shelf__plank {
+  top: calc(var(--shelf-y) - 90px); height: 180px;
+  transform: translateX(var(--x)) translateZ(-90px) rotateX(-90deg);
+  background:
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.03) 30%, rgba(0, 0, 0, 0.08) 75%, rgba(0, 0, 0, 0.22)),
+    repeating-linear-gradient(90deg, transparent 0 37px, rgba(0, 0, 0, 0.035) 37px 41px, transparent 41px 75px),
+    var(--wood);
+}
+.shelf__lip {
+  top: var(--shelf-y); height: var(--plank-h);
+  transform: translateX(var(--x));
+  background:
+    linear-gradient(to bottom, var(--wood-edge), transparent 18%, rgba(0, 0, 0, 0.12) 85%, rgba(0, 0, 0, 0.28)),
+    repeating-linear-gradient(90deg, transparent 0 37px, rgba(0, 0, 0, 0.03) 37px 41px, transparent 41px 75px),
+    var(--wood-dark);
+}
+
+/* ---------- year plate (flat layer, sits on the lip) ---------- */
+.shelf__plate {
+  position: absolute; left: 50%; top: calc(var(--shelf-y) + 3px); height: 12px;
+  transform: translateX(var(--x));
+  padding: 0 5px; border-radius: 2px;
+  font: 600 8.5px/12px var(--ui); letter-spacing: 0.08em;
+  color: color-mix(in srgb, var(--wood-dark) 65%, black);
+  background: linear-gradient(to bottom, color-mix(in srgb, var(--wood-edge) 55%, white), var(--wood-edge) 55%, color-mix(in srgb, var(--wood-edge) 82%, white));
+  box-shadow: inset 0 0 0 0.5px rgba(var(--shadow-ink), 0.45), 0 0.5px 0 rgba(0, 0, 0, 0.25);
+  white-space: nowrap;
+}
+
+/* ---------- hit slots (the focusable listbox options) ---------- */
+.shelf__hit {
+  position: absolute; left: 50%;
+  top: calc(var(--shelf-y) - var(--book-h) - 40px); height: calc(var(--book-h) + 48px);
+  width: var(--w);
+  transform: translateX(var(--x));
+  transform-origin: 50% 50%;
+  contain: strict; cursor: pointer; outline: none;
+}
+.shelf__hit[data-active] { transform: translateX(var(--x)) scaleX(1.6); z-index: 1; }
+.shelf__hit:focus-visible { outline: none; }
+
+/* ---------- the book: one box, one transform ----------
+   Spine at z = 0 facing the camera; the box extends back to z = -160. Faces are children; the root
+   never gets opacity / box-shadow / filter (DESIGN §7b). contain: layout style, never paint/strict. */
+.book {
+  --pull: 0; --breathe: 0; --press: 0; --dip: 0; --lift: 0; --recede: 0; --pick: 0;
+  --bk-cover: var(--bk-cover-base);
+  --bk-cover-2: var(--bk-cover-2-base);
+  --bk-ink: var(--bk-ink-base);
+  --finish-noise: var(--paper-noise);
+  position: absolute; left: 50%; top: calc(var(--shelf-y) - var(--book-h));
+  width: var(--spine-w); height: var(--book-h);
+  transform-style: preserve-3d;
+  contain: layout style;
+  pointer-events: none;
+  transform:
+    translate3d(
+      calc(var(--x) + var(--breathe) * 6px - var(--pick) * 80px),
+      calc(var(--pull) * -10px + var(--dip) * 2px - var(--lift) * 1px - var(--pick) * 24px),
+      calc((1 - var(--pick)) * (var(--pull) * 44px + var(--breathe) * var(--breathe) * 8px - var(--press) * 4px - var(--recede) * 10px) + var(--pick) * 150px)
+    )
+    rotateY(calc((1 - var(--pick)) * (var(--pull) * -22deg + var(--breathe) * -4deg) + var(--pick) * -90deg))
+    rotateZ(calc((1 - var(--pick)) * var(--jz)))
+    scale(calc(1 - var(--press) * 0.015));
+  transition:
+    --pull 260ms var(--ease-out),
+    --breathe 400ms var(--ease-out),
+    --press 80ms var(--ease-out),
+    --lift 200ms var(--ease-out),
+    --recede 260ms var(--ease-out),
+    --bk-cover 200ms linear, --bk-cover-2 200ms linear, --bk-ink 200ms linear;
+}
+.book[data-hover] {
+  --pull: 1;
+  transition:
+    --pull 300ms var(--ease-spring),
+    --breathe 400ms var(--ease-out),
+    --press 80ms var(--ease-out),
+    --lift 200ms var(--ease-out),
+    --recede 260ms var(--ease-out),
+    --bk-cover 200ms linear, --bk-cover-2 200ms linear, --bk-ink 200ms linear;
+}
+.book[data-press] { --press: 1; }
+.book[data-pickup] { transition: none; }
+.book[data-dip] { animation: book-dip 220ms var(--ease-out) both; }
+@keyframes book-dip { 0% { --dip: 0; } 35% { --dip: 1; } 100% { --dip: 0; } }
+
+/* search: non-matches recede and colour-mix toward the wall (never opacity on the root); matches lift */
+.shelf[data-searching] .book[data-dim] {
+  --recede: 1;
+  --bk-cover: color-mix(in srgb, var(--bk-cover-base) 34%, var(--wall));
+  --bk-cover-2: color-mix(in srgb, var(--bk-cover-base) 30%, var(--wall));
+  --bk-ink: color-mix(in srgb, var(--bk-ink-base) 40%, var(--wall));
+}
+.shelf[data-searching] .book[data-match] { --lift: 4; }
+.book[data-finish="cloth"] { --finish-noise: var(--cloth-noise); }
+.book[data-finish="linen"] { --finish-noise: var(--linen-noise); }
+
+.book__face {
+  position: absolute; left: 0; top: 0;
+  backface-visibility: hidden; -webkit-backface-visibility: hidden;
+}
+/* spine: z = 0, faces the camera; a curved-spine sheen baked in */
+.book__spine {
+  width: var(--spine-w); height: 100%;
+  background:
+    linear-gradient(90deg, rgba(0, 0, 0, 0.2), rgba(255, 255, 255, 0.1) 14%, rgba(255, 255, 255, 0) 50%, rgba(0, 0, 0, 0.14)),
+    var(--finish-noise),
+    linear-gradient(180deg, var(--bk-cover), var(--bk-cover-2));
+}
+/* covers: centred on the spine axis, swung 90deg, pushed back so they span z 0 … -160 */
+.book__cover {
+  width: var(--cover-w); height: 100%;
+  left: calc(var(--spine-w) - var(--cover-w) / 2);
+  overflow: hidden;
+  background:
+    linear-gradient(rgba(0, 0, 0, 0.06), rgba(0, 0, 0, 0.06)),
+    var(--finish-noise),
+    linear-gradient(180deg, var(--bk-cover), var(--bk-cover-2));
+}
+.book__cover.-front { transform: translateZ(calc(var(--cover-w) / -2)) rotateY(90deg); }
+.book__cover.-back { left: calc(var(--cover-w) / -2); transform: translateZ(calc(var(--cover-w) / -2)) rotateY(-90deg); }
+.book__cover img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; pointer-events: none; }
+.book__cover.-front::after {
+  content: ''; position: absolute; inset: 0; pointer-events: none;
+  background: var(--wall); opacity: 0; transition: opacity 200ms linear;
+}
+.shelf[data-searching] .book[data-dim] .book__cover.-front::after { opacity: 0.62; }
+.book__title {
+  position: absolute; left: 10px; right: 10px;
+  font: 600 14px/1.25 var(--serif); letter-spacing: -0.01em;
+  overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
+}
+.book__title.-band { bottom: 22%; padding: 8px 10px; background: var(--paper); color: var(--fg); border-radius: 2px; }
+.book__title.-plain { left: 0; right: 0; bottom: 0; padding: 36px 12px 14px; color: var(--bk-ink-light); background: linear-gradient(transparent, rgba(0, 0, 0, 0.5)); }
+/* top edge: the page block inset by the 2px boards (no overhang on the spine side), lit from above */
+.book__top {
+  width: var(--spine-w); height: var(--cover-w);
+  top: calc(var(--cover-w) / -2);
+  transform: translateZ(calc(var(--cover-w) / -2)) rotateX(-90deg);
+  border: 2px solid var(--bk-cover); border-top: 0;
+  background: linear-gradient(rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0.18)), var(--page-lines);
+  background-clip: padding-box;
+}
+/* the one shadow: a gradient face lying 1px above the plank; grows and darkens with the pull-out */
+.book__shadow {
+  width: calc(var(--spine-w) + 40px); height: 176px;
+  left: -20px; top: calc(var(--book-h) - 89px);
+  transform: translateZ(-88px) rotateX(-90deg) scale(calc(1 + var(--pull) * 0.3));
+  background: radial-gradient(closest-side, rgba(var(--shadow-ink), 0.5), rgba(var(--shadow-ink), 0));
+  opacity: calc(0.3 + var(--pull) * 0.15);
+}
+html[data-theme="dark"] .book__shadow { opacity: calc(0.42 + var(--pull) * 0.18); }
+/* vertical spine title with emboss */
+.book__spineTitle {
+  position: absolute; top: 14px; bottom: 22px; left: 50%;
+  transform: translateX(-50%);
+  writing-mode: vertical-rl; text-orientation: mixed;
+  font: 600 clamp(9px, calc(var(--spine-w) * 0.5), 14px)/1 var(--serif); letter-spacing: 0.02em;
+  color: var(--bk-ink);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: center;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.22), 0 -1px 0 rgba(0, 0, 0, 0.28);
+}
+.book[data-spine="initial"] .book__spineTitle { text-orientation: upright; font-size: clamp(10px, calc(var(--spine-w) * 0.6), 18px); letter-spacing: 0; }
+.book[data-thin] .book__spineTitle { display: none; }
+/* 'a year ago today': a ribbon peeks above the spine */
+.book__ribbon {
+  position: absolute; top: -9px; left: 50%; width: 5px; height: 16px; margin-left: -2.5px;
+  background: var(--accent);
+  clip-path: polygon(0 0, 100% 0, 100% 100%, 50% 72%, 0 100%);
+}
+
+/* the dashed 'New entry' slot; pops like a real book */
+.book--ghost .book__face { background: none; border: 1.5px dashed var(--faint); transition: border-color 200ms linear; }
+.book--ghost .book__shadow { border: 0; opacity: calc(var(--pull) * 0.25); }
+.book--ghost[data-hover] .book__face { border-color: var(--accent); }
+.book--ghost .book__plus {
+  position: absolute; inset: 0; margin: auto; width: 10px; height: 10px;
+  background:
+    linear-gradient(var(--muted), var(--muted)) center / 10px 1.5px no-repeat,
+    linear-gradient(var(--muted), var(--muted)) center / 1.5px 10px no-repeat;
+}
+.book--ghost[data-hover] .book__plus {
+  background:
+    linear-gradient(var(--accent), var(--accent)) center / 10px 1.5px no-repeat,
+    linear-gradient(var(--accent), var(--accent)) center / 1.5px 10px no-repeat;
+}
+
+/* ---------- label pill (flat layer) ---------- */
+.shelf__label {
+  position: absolute; left: 50%;
+  top: calc(var(--shelf-y) - var(--book-h) - 32px);
+  transform: translate(calc(var(--cx) - 50%), -100%);
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 12px; border-radius: 999px;
+  background: var(--paper); border: 1px solid var(--rule); box-shadow: var(--pill-shadow);
+  color: var(--fg); white-space: nowrap;
+  pointer-events: auto;
+  animation: shelf-label-in 180ms var(--ease-out) 80ms both;
+}
+.shelf__label::before, .shelf__label::after {
+  content: ''; position: absolute; left: 50%; border-radius: 50%;
+  background: var(--paper); border: 1px solid var(--rule);
+  box-shadow: 0 1px 3px rgba(var(--shadow-ink), 0.1);
+  animation: shelf-dot-in 180ms var(--ease-out) both;
+}
+.shelf__label::before { width: 7px; height: 7px; bottom: -21px; margin-left: -3.5px; animation-delay: 40ms; }
+.shelf__label::after { width: 4px; height: 4px; bottom: -28px; margin-left: -2px; animation-delay: 0ms; }
+.shelf__label[data-out], .shelf__label[data-out]::before, .shelf__label[data-out]::after {
+  animation: shelf-fade-out 140ms var(--ease-out) both; pointer-events: none;
+}
+.shelf__label[data-compact], .shelf__label[data-compact]::before, .shelf__label[data-compact]::after {
+  animation: shelf-fade-in 160ms var(--ease-out) both; pointer-events: none;
+}
+.shelf__label[data-focus] { outline: 2px solid var(--accent); outline-offset: 3px; }
+.shelf__label__main { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.shelf__label__title { font: 500 13px/1.25 var(--ui); }
+.shelf__label__date { font: italic 11px/1.3 var(--serif); color: var(--muted); }
+.shelf__label__note { font: italic 11px/1.3 var(--serif); color: var(--accent); }
+.shelf__label__snippet { font: 11.5px/1.3 var(--serif); color: var(--muted); max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
+.shelf__label__snippet mark { background: none; color: var(--accent); font-weight: 600; }
+.shelf__label__pencil {
+  width: 22px; height: 22px; border-radius: 50%; flex: none;
+  display: grid; place-items: center; color: var(--muted);
+  transition: color 120ms linear, background-color 120ms linear;
+}
+.shelf__label__pencil:hover { color: var(--accent); background: var(--sel); }
+@keyframes shelf-label-in { from { opacity: 0; transform: translate(calc(var(--cx) - 50%), calc(-100% + 6px)) scale(0.92); } }
+@keyframes shelf-dot-in { from { opacity: 0; transform: translateY(6px) scale(0.92); } }
+@keyframes shelf-fade-out { to { opacity: 0; } }
+@keyframes shelf-fade-in { from { opacity: 0; } }
+
+/* ---------- empty state ---------- */
+.shelf__empty {
+  position: absolute; left: 50%; top: calc(var(--shelf-y) + var(--plank-h) + 26px);
+  transform: translateX(calc(var(--x) - 50%));
+  text-align: center; white-space: nowrap;
+}
+.shelf__empty__title { font: 600 15px/1.3 var(--serif); color: var(--fg); }
+.shelf__empty__hint { font: italic 13px/1.4 var(--serif); color: var(--muted); }
+
+/* ---------- dim overlay while a book is open (a solid layer, never a filter) ---------- */
+.shelf__dim {
+  position: absolute; inset: 0; pointer-events: none;
+  background: color-mix(in srgb, var(--fg) 45%, transparent);
+  opacity: 0; transition: opacity 300ms var(--ease-out);
+}
+.shelf[data-receded] .shelf__dim { opacity: 1; transition: opacity 360ms var(--ease-out); }
+
+/* ---------- month pill (fixed, top-centre) ---------- */
+.shelf__month {
+  position: fixed; left: 50%; top: 58px; z-index: 30;
+  display: flex; align-items: baseline; gap: 10px;
+  padding: 6px 12px; border-radius: 999px;
+  background: var(--paper); border: 1px solid var(--rule); box-shadow: var(--pill-shadow);
+  font: 500 13px/1.2 var(--ui); color: var(--fg);
+  transform: translate(-50%, -6px); opacity: 0; pointer-events: none;
+  transition: opacity 200ms var(--ease-out), transform 200ms var(--ease-out);
+}
+.shelf__month[data-on] { opacity: 1; transform: translate(-50%, 0); transition: opacity 240ms var(--ease-out), transform 240ms var(--ease-out); }
+.shelf[data-away] .shelf__month, .shelf[data-receded] .shelf__month { opacity: 0; }
+.shelf__month__roll { position: relative; display: inline-block; white-space: nowrap; }
+.shelf__month__text { display: inline-block; }
+.shelf__month__text.-out { position: absolute; left: 0; top: 0; animation: shelf-roll-out 140ms var(--ease-out) both; }
+.shelf__month__text.-in { animation: shelf-roll-in 180ms var(--ease-out) both; }
+@keyframes shelf-roll-out { to { opacity: 0; transform: translateY(calc(var(--dir, 1) * -8px)); } }
+@keyframes shelf-roll-in { from { opacity: 0; transform: translateY(calc(var(--dir, 1) * 8px)); } }
+.shelf__month__day { font: italic 12px/1.2 var(--serif); color: var(--muted); }
+.shelf__month__day:empty { display: none; }
+
+/* ---------- scrubber (fixed, bottom) ---------- */
+.shelf__scrub {
+  position: fixed; left: 56px; right: 56px; bottom: 22px; height: 24px; z-index: 30;
+  opacity: 0; transition: opacity 200ms var(--ease-out);
+  outline: none; cursor: pointer; touch-action: none;
+}
+.shelf__scrub[data-near], .shelf__scrub[data-active], .shelf__scrub[data-drag], .shelf__scrub:focus-visible { opacity: 1; }
+.shelf[data-away] .shelf__scrub, .shelf[data-receded] .shelf__scrub { opacity: 0; pointer-events: none; }
+.shelf__scrub__track { position: absolute; left: 0; right: 0; top: 50%; height: 3px; margin-top: -1.5px; border-radius: 2px; background: var(--rule); }
+.shelf__scrub__tick { position: absolute; left: calc(var(--t) * 100%); top: 50%; width: 1px; height: 7px; margin-top: -3.5px; background: var(--faint); }
+.shelf__scrub__tick[data-year] { height: 11px; margin-top: -5.5px; background: var(--muted); }
+.shelf__scrub__tick[data-match]::after {
+  content: ''; position: absolute; left: -2.5px; top: -9px; width: 6px; height: 6px; border-radius: 50%; background: var(--accent);
+}
+.shelf__scrub__year { position: absolute; top: 12px; left: 0; transform: translateX(-50%); font: 11px/1 var(--ui); color: var(--muted); white-space: nowrap; }
+.shelf__scrub__thumb {
+  position: absolute; left: 0; top: 50%; width: 14px; height: 14px; border-radius: 50%;
+  background: var(--paper); border: 1px solid var(--faint); box-shadow: 0 1px 4px rgba(var(--shadow-ink), 0.18);
+  transform: translate(-50%, -50%);
+}
+.shelf__scrub[data-drag] .shelf__scrub__thumb { border-color: var(--accent); }
+.shelf__scrub__tip {
+  position: absolute; left: 50%; bottom: 20px; transform: translateX(-50%);
+  padding: 5px 10px; border-radius: 999px;
+  background: var(--paper); border: 1px solid var(--rule); box-shadow: var(--pill-shadow);
+  font: 500 12px/1.2 var(--ui); color: var(--fg); white-space: nowrap;
+  opacity: 0; transition: opacity 160ms var(--ease-out);
+}
+.shelf__scrub[data-drag] .shelf__scrub__tip { opacity: 1; }
+.shelf__scrub__tip:empty { display: none; }
+.shelf__scrub:focus-visible .shelf__scrub__thumb { outline: 2px solid var(--accent); outline-offset: 3px; }
+
+/* ---------- reduced motion: no rotation / parallax / overshoot; 2px lift; crossfades ---------- */
+html[data-reduce-motion="on"] .book,
+html[data-reduce-motion="on"] .book[data-hover] {
+  transform: translate3d(var(--x), calc(var(--pull) * -2px - var(--lift) * 1px), calc(var(--recede) * -10px));
+  transition: --pull 120ms linear, --lift 120ms linear, --recede 150ms linear, --bk-cover 150ms linear, --bk-cover-2 150ms linear, --bk-ink 150ms linear;
+}
+html[data-reduce-motion="on"] .book[data-dip] { animation: none; }
+html[data-reduce-motion="on"] .book__shadow { transform: translateZ(-88px) rotateX(-90deg); }
+html[data-reduce-motion="on"] .shelf__label,
+html[data-reduce-motion="on"] .shelf__label::before,
+html[data-reduce-motion="on"] .shelf__label::after { animation: shelf-fade-in 120ms linear both; animation-delay: 0ms; }
+html[data-reduce-motion="on"] .shelf__label[data-out],
+html[data-reduce-motion="on"] .shelf__label[data-out]::before,
+html[data-reduce-motion="on"] .shelf__label[data-out]::after { animation: shelf-fade-out 120ms linear both; }
+html[data-reduce-motion="on"] .shelf__month { transition: opacity 150ms linear; transform: translate(-50%, 0); }
+html[data-reduce-motion="on"] .shelf__month__text.-out { animation: shelf-fade-out 140ms linear both; }
+html[data-reduce-motion="on"] .shelf__month__text.-in { animation: shelf-fade-in 160ms linear both; }
+html[data-reduce-motion="on"] .shelf__stage, html[data-reduce-motion="on"] .shelf[data-receded] .shelf__stage { transition: transform 150ms linear; }

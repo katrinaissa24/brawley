@@ -1,0 +1,224 @@
+/* Folio — open book scene (surface 2). Tokens only. Perspective on .ob__stage, preserve-3d on
+   .ob__book and .ob__sheet; never opacity/filter/overflow on those. Faces are 3D leaves. */
+@property --a { syntax: '<angle>'; inherits: false; initial-value: 0deg; }
+@property --cover-a { syntax: '<angle>'; inherits: true; initial-value: 0deg; }
+@property --thick { syntax: '<number>'; inherits: true; initial-value: 2; }
+
+.ob {
+  position: fixed; inset: 0; z-index: 20;
+  display: grid; place-items: center;
+  font-family: var(--ui); color: var(--fg);
+  --page-w: 480px; --page-h: 677px; --page-scale: 0.588;
+  --page-lines-v: repeating-linear-gradient(to right, var(--paper) 0 3px, var(--rule) 3px 4px);
+  --page-lines-h: repeating-linear-gradient(to bottom, var(--paper) 0 3px, var(--rule) 3px 4px);
+  user-select: none; -webkit-user-select: none;
+}
+.ob__stage {
+  position: relative; width: calc(var(--page-w) * 2); height: var(--page-h);
+  perspective: 2400px; perspective-origin: 50% 42%;
+}
+.ob__stage[data-hidden] { visibility: hidden; }
+.ob__book {
+  position: absolute; left: 50%; top: 0; width: 0; height: var(--page-h);
+  transform-style: preserve-3d;
+  /* closed => centred on one page (-W/2); open => centred on the spread (0) */
+  transform: translateX(calc((1 + cos(var(--cover-a))) * var(--page-w) / -4));
+}
+.ob--notrig .ob__book { transform: translateX(var(--book-x, 0px)); }
+
+/* ---------- sheets ---------- */
+.ob__sheet {
+  position: absolute; left: 0; top: 0; width: var(--page-w); height: var(--page-h);
+  transform-origin: 0 50%; transform-style: preserve-3d;
+  transform: translateZ(var(--lift, 0px)) rotateY(var(--a));
+  visibility: hidden;
+}
+.ob__sheet[data-live] { visibility: visible; }
+.ob__sheet[data-flipping='1'] { --lift: 2px; will-change: transform; }
+.ob__sheet[data-flipping='2'] { --lift: 1px; will-change: transform; }
+.ob__sheet.-cover[data-flipping='1'] { --lift: 3px; }
+.ob__sheet.-cover:not([data-live]) { visibility: hidden; }
+
+.ob__face {
+  position: absolute; inset: 0; overflow: hidden; background: var(--paper);
+  backface-visibility: hidden; -webkit-backface-visibility: hidden;
+  cursor: default;
+}
+.ob__face.-back { transform: rotateY(180deg); }
+.ob__face.-cover { background: var(--cover-hex, var(--accent)); }
+.ob__gutter { position: absolute; inset: 0; pointer-events: none;
+  background: linear-gradient(to right, rgba(var(--shadow-ink), .12), transparent 7%); }
+.ob__face.-back .ob__gutter { background: linear-gradient(to left, rgba(var(--shadow-ink), .12), transparent 7%); }
+
+/* the document: rendered at 816x1152, scaled down once */
+.ob__docwrap {
+  position: absolute; left: 0; top: 0; width: 816px; height: 1152px;
+  transform: scale(var(--page-scale)); transform-origin: 0 0;
+  pointer-events: none; user-select: none;
+}
+.ob__docwrap .ed-doc { pointer-events: none; }
+
+/* content veil: paper until the cover passes halfway */
+.ob__veil { position: absolute; inset: 0; background: var(--paper); pointer-events: none;
+  opacity: 1; transition: opacity 200ms var(--ease-out); }
+.ob[data-revealed] .ob__veil { opacity: 0; }
+.ob__face.-endpaper > .ob__veil { background: var(--endpaper); }
+
+/* ---------- angle -> shading (pure CSS trig; --a is 0deg flat right .. -180deg flat left) ---------- */
+.ob__shade { position: absolute; inset: 0; pointer-events: none; }
+.ob__face.-front > .ob__shade {
+  background: linear-gradient(to right, rgba(var(--shadow-ink), .55), rgba(var(--shadow-ink), 0) 45%);
+  opacity: calc(-1 * sin(var(--a)) * .8);
+}
+.ob__face.-back > .ob__shade {
+  background: linear-gradient(to left, rgba(var(--shadow-ink), .5), rgba(var(--shadow-ink), 0) 40%, rgba(255, 255, 255, .35) 95%);
+  opacity: calc(-1 * sin(var(--a)) * .7);
+}
+.ob--notrig .ob__face.-front > .ob__shade { opacity: var(--shade-f, 0); }
+.ob--notrig .ob__face.-back > .ob__shade { opacity: var(--shade-b, 0); }
+
+/* cast shadow on the pages beneath (a flat leaf, lifted .6px so it never z-fights the page) */
+.ob__under { position: absolute; top: 0; width: var(--page-w); height: var(--page-h); pointer-events: none;
+  overflow: hidden; transform: translateZ(.6px); backface-visibility: hidden; -webkit-backface-visibility: hidden; }
+.ob__under.-right { left: 0; }
+.ob__under.-left { left: calc(-1 * var(--page-w)); }
+.ob__cast { position: absolute; inset: 0; opacity: calc(-1 * sin(var(--a))); }
+.ob__under.-right > .ob__cast { transform-origin: 0 50%; transform: scaleX(max(0, cos(var(--a))));
+  background: linear-gradient(to right, rgba(var(--shadow-ink), .35), rgba(var(--shadow-ink), 0)); }
+.ob__under.-left > .ob__cast { transform-origin: 100% 50%; transform: scaleX(max(0, -1 * cos(var(--a))));
+  background: linear-gradient(to left, rgba(var(--shadow-ink), .35), rgba(var(--shadow-ink), 0)); }
+.ob--notrig .ob__cast { opacity: var(--cast, 0); }
+.ob--notrig .ob__under.-right > .ob__cast { transform: scaleX(var(--cast-r, 0)); }
+.ob--notrig .ob__under.-left > .ob__cast { transform: scaleX(var(--cast-l, 0)); }
+
+/* ---------- closed blocks: thickness is a number, edges are fixed 32px faces scaled by it ---------- */
+.ob__block { position: absolute; top: 0; width: var(--page-w); height: var(--page-h); transform-style: preserve-3d;
+  transition: --thick 320ms var(--ease-out); }
+.ob__block.-right { left: 0; }
+.ob__block.-left { left: calc(-1 * var(--page-w)); visibility: hidden; }
+.ob[data-open] .ob__block.-left { visibility: visible; }
+.ob__block > .ob__bottom { position: absolute; inset: 0; background: var(--paper);
+  transform: translateZ(calc(var(--thick) * -1px)); backface-visibility: hidden; -webkit-backface-visibility: hidden; }
+.ob__block.-left > .ob__bottom { background: var(--endpaper); }
+.ob__block > .ob__edge { position: absolute; top: 0; width: 32px; height: 100%; background: var(--page-lines-v);
+  backface-visibility: hidden; -webkit-backface-visibility: hidden; }
+.ob__block.-right > .ob__edge { left: calc(var(--page-w) - 16px); transform-origin: 50% 50%;
+  transform: translateX(16px) rotateY(90deg) translateZ(calc(var(--thick) * -0.5px)) scaleX(calc(var(--thick) / 32)); }
+.ob__block.-left > .ob__edge { left: -16px; transform-origin: 50% 50%;
+  transform: translateX(-16px) rotateY(-90deg) translateZ(calc(var(--thick) * -0.5px)) scaleX(calc(var(--thick) / 32)); }
+.ob__block > .ob__foot { position: absolute; left: 0; width: 100%; height: 32px; top: calc(var(--page-h) - 16px);
+  background: var(--page-lines-h); transform-origin: 50% 50%;
+  transform: rotateX(-90deg) translateZ(calc(var(--thick) * -0.5px)) scaleY(calc(var(--thick) / 32));
+  backface-visibility: hidden; -webkit-backface-visibility: hidden; }
+.ob__block > .ob__head { position: absolute; left: 0; width: 100%; height: 32px; top: -16px;
+  background: var(--page-lines-h); transform-origin: 50% 50%;
+  transform: rotateX(90deg) translateZ(calc(var(--thick) * -0.5px)) scaleY(calc(var(--thick) / 32));
+  backface-visibility: hidden; -webkit-backface-visibility: hidden; }
+.ob__block > .ob__back { position: absolute; inset: -3px -3px -3px 0; background: var(--cover-hex, var(--accent));
+  border-radius: 0 3px 3px 0; transform: translateZ(calc(var(--thick) * -1px - 2px));
+  backface-visibility: hidden; -webkit-backface-visibility: hidden; }
+.ob__block.-left > .ob__back { inset: -3px 0 -3px -3px; border-radius: 3px 0 0 3px; }
+.ob__block.-right > .ob__back::after { content: ''; position: absolute; inset: 0;
+  background: linear-gradient(to right, rgba(var(--shadow-ink), .22), transparent 12%); }
+
+/* ---------- cover face ---------- */
+.ob__coverImg { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; pointer-events: none; }
+.ob__coverSheen { position: absolute; inset: 0; pointer-events: none;
+  background: linear-gradient(105deg, rgba(255, 255, 255, .14), transparent 45%, rgba(var(--shadow-ink), .18)); }
+.ob__coverSpineShade { position: absolute; inset: 0; pointer-events: none;
+  background: linear-gradient(to right, rgba(var(--shadow-ink), .35), transparent 9%); }
+.ob__coverBand {
+  position: absolute; left: 9%; right: 9%; top: 22%; padding: 14px 16px;
+  background: color-mix(in srgb, var(--cover-deep) 88%, var(--fg)); color: var(--cover-ink);
+  font: 700 calc(22px * var(--page-scale) / 0.5) / 1.2 var(--serif); letter-spacing: -0.01em; text-align: center;
+  border-radius: 2px; overflow-wrap: anywhere;
+}
+.ob__coverBand.-empty { font-style: italic; font-weight: 400; opacity: .8; }
+
+/* ---------- endpaper ---------- */
+.ob__face.-endpaper { background: var(--endpaper); }
+.ob__ep { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center;
+  justify-content: center; text-align: center; padding: 12%; gap: 10px; }
+.ob__epTitle {
+  font: 700 2.2em/1.15 var(--serif); letter-spacing: -0.015em; color: var(--fg);
+  font-size: calc(2.2 * 18.5px * var(--page-scale) / 0.5); max-width: 100%; overflow-wrap: anywhere;
+  border-radius: 4px; padding: 2px 6px; cursor: text;
+}
+.ob__epTitle.-empty { font-style: italic; font-weight: 400; color: var(--muted); }
+.ob__epTitle:hover { background: rgba(var(--shadow-ink), .05); }
+.ob__epDate { font: italic 15px/1.4 var(--serif); font-size: calc(15px * var(--page-scale) / 0.5); color: var(--muted);
+  border-radius: 4px; padding: 2px 8px; }
+.ob__epDate:hover { background: rgba(var(--shadow-ink), .05); color: var(--fg); }
+.ob__epTitle:focus-visible, .ob__epDate:focus-visible, .ob__opt:focus-visible, .ob__menu button:focus-visible {
+  outline: 2px solid var(--focus); outline-offset: 2px; }
+
+/* ---------- ghost page ---------- */
+.ob__ghost { position: absolute; inset: 0; display: grid; place-items: center; cursor: pointer;
+  font: italic 17px/1.4 var(--serif); color: var(--muted); }
+.ob__ghost:hover { color: var(--fg); }
+.ob__ghost span { display: inline-flex; align-items: center; gap: 8px; padding: 10px 16px; border-radius: 8px;
+  border: 1px dashed var(--rule); }
+.ob__ghost:hover span { border-color: var(--faint); }
+
+/* ---------- page furniture on faces (flat leaves inside a face) ---------- */
+.ob__num { position: absolute; bottom: 14px; font: italic 11px/1 var(--serif); color: var(--muted);
+  opacity: 0; transition: opacity 160ms var(--ease-out); pointer-events: none; }
+.ob__face.-front > .ob__num { right: 18px; }
+.ob__face.-back > .ob__num { left: 18px; }
+.ob[data-hover] .ob__num { opacity: 1; }
+.ob__opt { position: absolute; bottom: 8px; width: 24px; height: 24px; border-radius: 12px;
+  display: grid; place-items: center; color: var(--muted); font: 700 14px/1 var(--ui); letter-spacing: 1px;
+  opacity: 0; transition: opacity 160ms var(--ease-out), background 120ms; }
+.ob__face.-front > .ob__opt { left: 12px; }
+.ob__face.-back > .ob__opt { right: 12px; }
+.ob__face:hover > .ob__opt, .ob__opt:focus-visible, .ob__opt[aria-expanded='true'] { opacity: 1; }
+.ob__opt:hover { background: rgba(var(--shadow-ink), .07); color: var(--fg); }
+
+/* ---------- flat layers over the spread (siblings of .ob__book; never inside the 3D tree) ---------- */
+.ob__hits { position: absolute; inset: 0 -24px; pointer-events: none; }
+.ob__zone { position: absolute; top: 0; bottom: 0; width: calc(max(var(--page-w) * 0.12, 44px) + 24px);
+  pointer-events: auto; touch-action: none;
+  cursor: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'><path d='M4 4h16v16H4z' fill='%23ffffff' stroke='%231a1a19' stroke-width='1.2'/><path d='M20 20H10c0-5.5 4.5-10 10-10z' fill='%23e7e4dd' stroke='%231a1a19' stroke-width='1.2' stroke-linejoin='round'/></svg>") 12 12, pointer; }
+.ob__zone.-fwd { right: 0; }
+.ob__zone.-back { left: 0; }
+.ob__zone[hidden] { display: none; }
+.ob__ribbon { position: absolute; top: -3px; width: 14px; height: calc(100% + 26px); pointer-events: none;
+  background: var(--ribbon, var(--accent)); opacity: 0; transition: opacity 160ms var(--ease-out);
+  clip-path: polygon(0 0, 100% 0, 100% 100%, 50% calc(100% - 9px), 0 100%); }
+.ob__ribbon::before { content: ''; position: absolute; inset: 0; background: linear-gradient(to right, rgba(255,255,255,.18), transparent 50%, rgba(var(--shadow-ink), .25)); }
+.ob__ribbon[data-on] { opacity: .95; }
+.ob__caption { position: absolute; left: 0; right: 0; top: calc(100% + 22px); text-align: center;
+  font: 13px/1.4 var(--ui); color: var(--muted); opacity: 0; transform: translateY(6px);
+  transition: opacity 160ms var(--ease-out), transform 160ms var(--ease-out); pointer-events: none; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; padding: 0 12px; }
+.ob[data-ready] .ob__caption { opacity: 1; transform: none; }
+.ob__xfade { position: absolute; inset: 0; background: var(--paper); pointer-events: none; opacity: 0; }
+
+/* ---------- page options menu (flat, fixed) ---------- */
+.ob__menu { position: fixed; z-index: 22; min-width: 160px; padding: 4px; border-radius: 10px;
+  background: var(--chrome); border: 1px solid var(--rule); box-shadow: 0 8px 28px rgba(var(--shadow-ink), .18);
+  font: 13px/1.3 var(--ui); animation: ob-pop 140ms var(--ease-out) both; }
+.ob__menu button { display: block; width: 100%; text-align: left; padding: 7px 10px; border-radius: 6px; color: var(--fg); }
+.ob__menu button:hover:not(:disabled) { background: var(--sel); }
+.ob__menu button:disabled { color: var(--faint); cursor: default; }
+.ob__menu button.-danger:hover:not(:disabled) { color: var(--accent); }
+.ob__menuHint { padding: 4px 10px 6px; color: var(--muted); font-size: 12px; }
+@keyframes ob-pop { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+
+/* ---------- 2D clones for the shelf handoffs (flat, fixed) ---------- */
+.ob-clone { position: fixed; left: 0; top: 0; z-index: 25; pointer-events: none; transform-origin: 0 0; perspective: 1600px; }
+.ob-clone__page { position: absolute; top: 0; height: 100%; background: var(--paper); box-shadow: 0 1px 0 rgba(var(--shadow-ink), .08) inset; }
+.ob-clone__cover { position: absolute; top: 0; height: 100%; background: var(--cover-hex, var(--accent)); overflow: hidden;
+  border-radius: 2px 4px 4px 2px; box-shadow: 0 10px 30px rgba(var(--shadow-ink), .28), 0 2px 6px rgba(var(--shadow-ink), .18);
+  transform-origin: 0 50%; backface-visibility: hidden; -webkit-backface-visibility: hidden; }
+.ob-clone__cover.-inner { background: var(--endpaper); transform: rotateY(180deg); box-shadow: none; }
+.ob-clone__img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.ob-clone__band { position: absolute; left: 9%; right: 9%; bottom: 22%; padding: .6em .7em; border-radius: 2px; text-align: left;
+  background: var(--paper); color: var(--fg);
+  font: 600 1em/1.2 var(--serif); letter-spacing: -0.01em; overflow-wrap: anywhere; }
+.ob-clone__band.-empty { font-style: italic; font-weight: 400; opacity: .8; }
+
+/* ---------- reduced motion ---------- */
+html[data-reduce-motion='on'] .ob__block { transition: none; }
+html[data-reduce-motion='on'] .ob__veil { transition-duration: 150ms; }
+html[data-reduce-motion='on'] .ob__caption, html[data-reduce-motion='on'] .ob__ribbon { transition-duration: 120ms; }

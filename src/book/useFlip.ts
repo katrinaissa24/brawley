@@ -1,0 +1,337 @@
+/**
+ * Flip controller: owns every 3D variable on the sheets (--a on the sheet + its two shades + the two
+ * cast elements of its slot, data-live, data-flipping) and the closed-block thickness. JS-driven in rAF
+ * (drag mapping, spring landing, hinge tween); CSS derives shading from --a. React never touches these.
+ *
+ * Spread model: cur = -1 means the book is closed (cover at 0deg); cur >= 0 is the visible spread.
+ * A forward flip turns sheet `target` (the right page's sheet); a backward flip turns sheet `target - 1`.
+ * `target` = the spread the book is heading to (cur + the in-flight commits), so stacked flips pick
+ * the sheet beneath rather than the one already in the air. Drags never start while a sheet is in flight,
+ * so a cancel is always the only flight and the geometry stays consistent.
+ */
+import { useMemo } from 'react'
+import { MOTION } from '@/feel/motion'
+import { sound } from '@/feel/sound'
+import { SPRINGS, animateSpring, tween } from '@/feel/spring'
+import type { SheetEls } from './Sheet'
+
+export type Dir = 1 | -1
+export interface Unders { r: HTMLElement; l: HTMLElement }
+interface Flight {
+  k: number
+  dir: Dir
+  a: number
+  slot: 1 | 2
+  els: SheetEls
+  unders: Unders
+  silent: boolean
+  gated: boolean // sounds on angle crossings (drags + springs)
+  lifted: boolean
+  landed: boolean
+  cancel: (() => void) | null
+  extra?: (a: number) => void
+}
+interface Drag { f: Flight; spineX: number; r: number; x0: number; y0: number; pointerId: number; samples: [number, number][] }
+
+const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v))
+const D2R = Math.PI / 180
+/** cubic-bezier(0.5, 0, 0.2, 1) — the hinge ease, solved for a tween */
+export function hingeEase(t: number) {
+  if (t <= 0) return 0
+  if (t >= 1) return 1
+  const bx = (u: number) => 3 * 0.5 * u * (1 - u) * (1 - u) + 3 * 0.2 * u * u * (1 - u) + u * u * u
+  const by = (u: number) => 3 * 0 * u * (1 - u) * (1 - u) + 3 * 1 * u * u * (1 - u) + u * u * u
+  let lo = 0, hi = 1, u = t
+  for (let i = 0; i < 18; i++) { u = (lo + hi) / 2; if (bx(u) < t) lo = u; else hi = u }
+  return by(u)
+}
+export const easeOutQuintFn = (t: number) => 1 - Math.pow(1 - t, 5)
+export const hasTrig = typeof CSS !== 'undefined' && !!CSS.supports && CSS.supports('opacity', 'calc(sin(1deg))')
+
+export class FlipController {
+  sheets = new Map<number, SheetEls>()
+  unders: [Unders | null, Unders | null] = [null, null]
+  blocks: { left: HTMLElement | null; right: HTMLElement | null } = { left: null, right: null }
+  book: HTMLElement | null = null
+  /** current resting spread (-1 = closed) */
+  cur = -1
+  /** the spread the book is heading to (cur + in-flight commits) */
+  target = -1
+  maxSpread = 0
+  sheetCount = 1
+  inFlight: Flight[] = []
+  private queue: { dir: Dir; ms?: number; silent?: boolean }[] = []
+  private waiters: (() => void)[] = []
+  private drag: Drag | null = null
+  private peek: { k: number; cancel: () => void } | null = null
+  private wheelAcc = 0
+  private wheelT = 0
+  private wheelLast = 0
+  /** React-side commit of the resting spread (navigate + remount window) */
+  onCommit: (spread: number) => void = () => {}
+  /** called at the start of a flip when MOTION.reduced (crossfade instead of a hinge) */
+  onReducedFlip: () => void = () => {}
+
+  /* ---------- writes ---------- */
+  private writeVars(els: SheetEls, unders: Unders | null, a: number) {
+    const s = a.toFixed(3) + 'deg'
+    els.root.style.setProperty('--a', s)
+    els.shadeF.style.setProperty('--a', s)
+    els.shadeB.style.setProperty('--a', s)
+    if (unders) { unders.r.style.setProperty('--a', s); unders.l.style.setProperty('--a', s) }
+    if (!hasTrig) {
+      const sn = -Math.sin(a * D2R), c = Math.cos(a * D2R)
+      els.shadeF.style.setProperty('--shade-f', (sn * 0.8).toFixed(3))
+      els.shadeB.style.setProperty('--shade-b', (sn * 0.7).toFixed(3))
+      if (unders) {
+        const o = sn.toFixed(3)
+        unders.r.style.setProperty('--cast', o); unders.l.style.setProperty('--cast', o)
+        unders.r.style.setProperty('--cast-r', Math.max(0, c).toFixed(3))
+        unders.l.style.setProperty('--cast-l', Math.max(0, -c).toFixed(3))
+      }
+    }
+  }
+  private writeAngle(f: Flight, a: number) {
+    f.a = a
+    this.writeVars(f.els, f.unders, a)
+    f.extra?.(a)
+    if (f.gated && !f.silent) {
+      const p = f.dir === 1 ? -a : 180 + a // 0 at start .. 180 at the end of the turn
+      if (!f.lifted && p > 15) { f.lifted = true; sound.pageLift() }
+      else if (f.lifted && !f.landed && p < 15) { f.lifted = false; sound.pageLift(0.5) }
+      if (!f.landed && p > 165) { f.landed = true; sound.pageLand() }
+    }
+  }
+  private thick(n: number) { return Math.max(2, Math.min(26, 1.5 + n * 0.9)) }
+
+  /** Put every sheet that is not in flight at rest for `cur`; live = cur-1, cur (+ flights and their unders). */
+  syncRest() {
+    const cur = this.cur
+    const flying = new Set(this.inFlight.map(f => f.k))
+    const live = new Set<number>([cur - 1, cur])
+    for (const f of this.inFlight) { live.add(f.k); live.add(f.k - 1); live.add(f.k + 1) }
+    if (this.peek) { live.add(this.peek.k); live.add(this.peek.k + 1); live.add(this.peek.k - 1) }
+    for (const [k, els] of this.sheets) {
+      if (!flying.has(k) && !(this.peek && this.peek.k === k)) this.writeVars(els, null, k < cur ? -180 : 0)
+      if (live.has(k)) els.root.dataset.live = ''
+      else delete els.root.dataset.live
+    }
+    if (!this.inFlight.length) for (const u of this.unders) if (u) this.writeVars({ root: u.r, shadeF: u.r, shadeB: u.l }, u, 0)
+    const right = this.sheetCount - Math.max(0, cur)
+    const left = Math.max(0, cur)
+    this.blocks.right?.style.setProperty('--thick', this.thick(right).toFixed(2))
+    this.blocks.left?.style.setProperty('--thick', this.thick(left).toFixed(2))
+  }
+
+  /* ---------- lifecycle ---------- */
+  private canFlip(dir: Dir, from = this.target) {
+    return dir === 1 ? from < this.maxSpread : from > 0
+  }
+  private beginFlip(dir: Dir, opts: { silent?: boolean; gated?: boolean; allowCover?: boolean } = {}): Flight | null {
+    if (!opts.allowCover && !this.canFlip(dir)) return null
+    const k = dir === 1 ? this.target : this.target - 1
+    const els = this.sheets.get(k)
+    if (!els) return null
+    const slot: 1 | 2 = this.inFlight.length === 0 ? 1 : 2
+    const unders = this.unders[slot - 1] ?? this.unders[0]
+    if (!unders) return null
+    let a = dir === 1 ? 0 : -180
+    if (this.peek && this.peek.k === k) { this.peek.cancel(); a = this.peekAngle; this.peek = null }
+    const f: Flight = { k, dir, a, slot, els, unders, silent: !!opts.silent, gated: !!opts.gated, lifted: false, landed: false, cancel: null }
+    els.root.dataset.flipping = String(slot)
+    this.inFlight.push(f)
+    this.target += dir
+    this.syncRest()
+    this.writeAngle(f, a)
+    if (MOTION.reduced) this.onReducedFlip()
+    return f
+  }
+  private endFlip(f: Flight, result: 'commit' | 'cancel') {
+    f.cancel?.()
+    f.cancel = null
+    delete f.els.root.dataset.flipping
+    f.els.root.style.willChange = ''
+    this.inFlight.splice(this.inFlight.indexOf(f), 1)
+    if (result === 'commit') this.cur += f.dir
+    else this.target -= f.dir
+    if (!this.inFlight.length) this.target = this.cur
+    this.syncRest()
+    this.onCommit(this.cur)
+    if (this.queue.length) {
+      const q = this.queue.shift()!
+      this.flip(q.dir, { ms: q.ms, silent: q.silent })
+    }
+    if (!this.inFlight.length && !this.queue.length) { const w = this.waiters; this.waiters = []; w.forEach(r => r()) }
+  }
+  private peekAngle = 0
+
+  /** Programmatic (click / key / silent) flip: hinge tween, sounds at 0 and 72%. */
+  flip(dir: Dir, opts: { ms?: number; silent?: boolean; allowCover?: boolean; extra?: (a: number) => void } = {}): boolean {
+    if (this.drag) return false
+    if (!opts.allowCover && !this.canFlip(dir)) return false
+    if (this.inFlight.length >= 2) { this.queue.push({ dir, ms: opts.ms, silent: opts.silent }); return true }
+    const f = this.beginFlip(dir, { silent: opts.silent, allowCover: opts.allowCover })
+    if (!f) return false
+    f.extra = opts.extra
+    const to = dir === 1 ? -180 : 0
+    const ms = opts.ms ?? 520
+    if (!opts.silent) sound.pageLift()
+    let landed = false
+    f.cancel = tween({
+      from: f.a, to, ms, ease: hingeEase,
+      onFrame: (x, t) => {
+        this.writeAngle(f, x)
+        if (!landed && t >= 0.72) { landed = true; if (!opts.silent) sound.pageLand(1, Math.min(1.4, Math.max(0.6, ms / 520))) }
+      },
+      onDone: () => { if (!landed && !opts.silent) sound.pageLand(); this.endFlip(f, 'commit') },
+    })
+    return true
+  }
+
+  /** Open the cover (closed -> spread 0). `extra` receives the cover angle each frame (for --cover-a). */
+  openCover(ms: number, extra: (a: number) => void): Promise<void> {
+    if (this.cur >= 0) { extra(-180); return Promise.resolve() }
+    const ok = this.flip(1, { ms, silent: true, allowCover: true, extra })
+    if (!ok) { this.cur = this.target = 0; this.syncRest(); extra(-180); return Promise.resolve() }
+    return this.settled()
+  }
+
+  /** Flip or jump to a spread. Resolves when at rest there. */
+  flipTo(spread: number, opts: { ms?: number; silent?: boolean } = {}): Promise<void> {
+    spread = clamp(spread, 0, this.maxSpread)
+    if (this.drag) return this.settled()
+    const from = this.target
+    if (spread === from) return this.settled()
+    if (Math.abs(spread - from) === 1 && from >= 0) {
+      this.flip(spread > from ? 1 : -1, opts)
+      return this.settled()
+    }
+    // jump silently
+    if (this.inFlight.length) return this.settled().then(() => this.flipTo(spread, opts))
+    this.cur = this.target = spread
+    this.syncRest()
+    this.onCommit(spread)
+    return Promise.resolve()
+  }
+  /** Jump without animation (used by the riffle to skip the far part). */
+  jump(spread: number) {
+    spread = clamp(spread, -1, this.maxSpread)
+    if (this.inFlight.length || this.drag) return
+    this.cur = this.target = spread
+    this.syncRest()
+    this.onCommit(spread)
+  }
+  settled(): Promise<void> {
+    if (!this.inFlight.length && !this.queue.length) return Promise.resolve()
+    return new Promise(r => this.waiters.push(r))
+  }
+
+  /* ---------- hover peek ---------- */
+  setPeek(dir: Dir, on: boolean) {
+    if (this.inFlight.length || this.drag || MOTION.reduced) return
+    const k = dir === 1 ? this.target : this.target - 1
+    if (on && !this.canFlip(dir)) return
+    if (this.peek && this.peek.k !== k) { this.peek.cancel(); this.peek = null }
+    const els = this.sheets.get(k)
+    if (!els) return
+    const rest = dir === 1 ? 0 : -180
+    const to = on ? rest + (dir === 1 ? -6 : 6) : rest
+    this.peek?.cancel()
+    const unders = this.unders[0]
+    const p = { k, cancel: () => {} }
+    this.peek = p
+    this.syncRest()
+    p.cancel = tween({
+      from: this.peekAngle || rest, to, ms: 180, ease: easeOutQuintFn,
+      onFrame: x => { this.peekAngle = x; this.writeVars(els, unders, x) },
+      onDone: () => { if (!on) { if (this.peek === p) this.peek = null; this.peekAngle = 0; this.syncRest() } },
+    })
+  }
+
+  /* ---------- drag (pointer capture on the scene; one layout read per gesture) ---------- */
+  onPointerDown(e: PointerEvent, dir: Dir, scene: HTMLElement) {
+    if (e.button !== 0 || this.drag || this.inFlight.length) return
+    if (!this.canFlip(dir) || !this.book) return
+    const f = this.beginFlip(dir, { gated: true })
+    if (!f) return
+    scene.setPointerCapture(e.pointerId)
+    const rect = this.book.getBoundingClientRect()
+    const spineX = rect.left
+    const r = Math.max(40, Math.abs(e.clientX - spineX))
+    this.drag = { f, spineX, r, x0: e.clientX, y0: e.clientY, pointerId: e.pointerId, samples: [[e.timeStamp, f.a]] }
+  }
+  onPointerMove(e: PointerEvent) {
+    const d = this.drag
+    if (!d || e.pointerId !== d.pointerId) return
+    const { f, spineX, r } = d
+    const fwd = (x: number) => -Math.acos(clamp((x - spineX) / r, -1, 1)) / D2R
+    const a = f.dir === 1 ? fwd(e.clientX) : -180 - fwd(2 * spineX - e.clientX)
+    this.writeAngle(f, a)
+    d.samples.push([e.timeStamp, a])
+    if (d.samples.length > 4) d.samples.shift()
+  }
+  onPointerUp(e: PointerEvent, scene: HTMLElement) {
+    const d = this.drag
+    if (!d || e.pointerId !== d.pointerId) return
+    this.drag = null
+    try { scene.releasePointerCapture(e.pointerId) } catch { /* already released */ }
+    const { f, samples } = d
+    const [t0, a0] = samples[0], [t1, a1] = samples[samples.length - 1]
+    const v = t1 > t0 ? ((a1 - a0) / (t1 - t0)) * 1000 : 0 // deg/s
+    const end = f.dir === 1 ? -180 : 0
+    const rest = f.dir === 1 ? 0 : -180
+    if (Math.hypot(e.clientX - d.x0, e.clientY - d.y0) < 6 && Math.abs(f.a - rest) < 8) {
+      // a plain click on the edge: animated flip from here
+      f.gated = false
+      const ms = 520
+      let landed = false
+      sound.pageLift()
+      f.cancel = tween({ from: f.a, to: end, ms, ease: hingeEase,
+        onFrame: (x, t) => { this.writeAngle(f, x); if (!landed && t >= 0.72) { landed = true; sound.pageLand() } },
+        onDone: () => this.endFlip(f, 'commit') })
+      return
+    }
+    const progress = f.dir === 1 ? -f.a : 180 + f.a
+    const toward = f.dir === 1 ? -v : v
+    const commit = progress > 55 || toward > 250
+    const to = commit ? end : rest
+    f.cancel = animateSpring({
+      from: f.a, to, v0: v, spring: commit ? SPRINGS.flipLand : SPRINGS.gentle, epsilon: 0.05,
+      onFrame: x => this.writeAngle(f, x),
+      onDone: () => this.endFlip(f, commit ? 'commit' : 'cancel'),
+    })
+  }
+  get dragging() { return !!this.drag }
+
+  /* ---------- two-finger horizontal wheel burst ---------- */
+  onWheel(e: WheelEvent): boolean {
+    if (Math.abs(e.deltaX) <= Math.abs(e.deltaY)) return false
+    const now = e.timeStamp
+    if (now - this.wheelT > 200) this.wheelAcc = 0
+    this.wheelT = now
+    this.wheelAcc += e.deltaX
+    if (Math.abs(this.wheelAcc) > 60 && now - this.wheelLast > 500) {
+      this.wheelLast = now
+      const dir: Dir = this.wheelAcc > 0 ? 1 : -1
+      this.wheelAcc = 0
+      this.flip(dir)
+    }
+    return true
+  }
+
+  dispose() {
+    for (const f of this.inFlight) f.cancel?.()
+    this.inFlight = []
+    this.queue = []
+    this.peek?.cancel()
+    this.peek = null
+    this.drag = null
+    const w = this.waiters
+    this.waiters = []
+    w.forEach(r => r())
+  }
+}
+
+export function useFlipController() {
+  return useMemo(() => new FlipController(), [])
+}

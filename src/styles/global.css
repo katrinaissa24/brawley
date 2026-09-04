@@ -1,0 +1,90 @@
+/* Folio — design tokens & base. Light is the reference theme (the Markdown reader). */
+:root {
+  color-scheme: light;
+  /* ground & ink (from the reference) */
+  --bg: #ffffff;
+  --paper: #ffffff;
+  --fg: #1a1a19;
+  --muted: #8a8880;
+  --faint: #b8b5ad;
+  --rule: #e7e4dd;
+  --chrome: #faf9f7;
+  --sel: #e9e5dc;
+  --accent: #c15f3c;
+  --accent-rgb: 193, 95, 60;
+  --code-bg: #f5f3ef;
+
+  /* shelf world (the cream wall + wood from the 3D reference) */
+  --wall: #f3efe6;
+  --wall-deep: #e9e3d6;
+  --wood: #b98a5a;
+  --wood-dark: #8f6537;
+  --wood-edge: #d9b384;
+  --shadow-ink: 40, 30, 15;
+
+  /* type */
+  --serif: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+  --ui: -apple-system, "SF Pro Text", system-ui, sans-serif;
+  --mono: "SF Mono", "JetBrains Mono", Menlo, monospace;
+
+  /* document type scale (reference: 18.5px / 1.68) */
+  --doc-size: 18.5px;
+  --doc-lh: 1.68;
+
+  /* grid */
+  --dot: #cfcabf;
+  --dot-pitch: 20px;
+
+  /* motion */
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --ease-spring: cubic-bezier(0.34, 1.4, 0.64, 1);
+  --dur-fast: 140ms;
+  --dur: 260ms;
+  --dur-slow: 520ms;
+
+  /* selection / focus */
+  --focus: #3b82f6;
+  --focus-rgb: 59, 130, 246;
+}
+
+html[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #1b1b19;
+  --paper: #232320;
+  --fg: #e8e6e1;
+  --muted: #8f8d86;
+  --faint: #5e5c55;
+  --rule: #33322e;
+  --chrome: #232320;
+  --sel: #33322e;
+  --accent: #e08a63;
+  --accent-rgb: 224, 138, 99;
+  --code-bg: #262623;
+  --wall: #201f1b;
+  --wall-deep: #17160f;
+  --wood: #6a4a2a;
+  --wood-dark: #46301a;
+  --wood-edge: #8a6540;
+  --shadow-ink: 0, 0, 0;
+  --dot: #45433c;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+html, body, #root { height: 100%; margin: 0; }
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--ui);
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
+input, textarea { font: inherit; color: inherit; }
+::selection { background: rgba(var(--accent-rgb), 0.22); }
+
+@media (prefers-reduced-motion: reduce) {
+  :root { --dur-fast: 0ms; --dur: 0ms; --dur-slow: 0ms; }
+}
