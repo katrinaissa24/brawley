@@ -54,6 +54,8 @@ export const ui = {
     spineTitle: 'Title',
     spineInitial: 'Initial',
     spineBlank: 'Blank',
+    thickness: 'Thickness',
+    thicknessAuto: 'Auto',
     tooBig: 'That picture is too large to keep',
     notAnImage: "That file isn't a picture",
   },

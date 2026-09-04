@@ -4,13 +4,14 @@
  */
 import { useEffect, useRef, useState } from 'react'
 import type { Cover, Hue, Id, Rect, Tint } from '@/model/types'
+import { BOOK, spineWidth } from '@/model/types'
 import { useEntry, useStore } from '@/model/store'
 import { HUES, HUE_NAMES, HUE_ORDER, INK, inkFor } from '@/model/palette'
 import { db, ImageTooLargeError, NotAnImageError, useImageUrl } from '@/lib/db'
 import { sound } from '@/feel/sound'
 import { S } from '@/copy/strings'
 import { Popover } from './Popover'
-import { Icon, Section, Segmented } from './controls'
+import { Icon, Section, Segmented, Slider } from './controls'
 
 const TINTS_MORE: readonly Tint[] = [0, 2]
 
@@ -29,8 +30,8 @@ export function CoverInspector({ entryId, anchor }: { entryId: Id; anchor: Rect 
 
   const C = S.ui.cover
   const cover = entry.cover
-  const set = (patch: Partial<Cover>) =>
-    useStore.getState().updateEntry(entryId, e => ({ ...e, cover: { ...e.cover, ...patch } }))
+  const set = (patch: Partial<Cover>, coalesce?: string) =>
+    useStore.getState().updateEntry(entryId, e => ({ ...e, cover: { ...e.cover, ...patch } }), coalesce ? { coalesce } : undefined)
 
   const pickColor = (hue: Hue, tint: Tint) => {
     if (cover.hue === hue && cover.tint === tint) return
@@ -183,6 +184,21 @@ export function CoverInspector({ entryId, anchor }: { entryId: Id; anchor: Rect 
             options={[{ value: 'title', label: C.spineTitle }, { value: 'initial', label: C.spineInitial }, { value: 'blank', label: C.spineBlank }] as const}
             onChange={spine => set({ spine })}
           />
+        </Section>
+
+        <Section title={C.thickness}>
+          <Slider
+            label={C.thickness}
+            min={BOOK.minSpine}
+            max={BOOK.maxSpine}
+            value={cover.thickness ?? spineWidth(entry.stats.pages, entry.stats.words)}
+            onChange={thickness => set({ thickness }, 'thickness:' + entryId)}
+          />
+          {cover.thickness !== undefined && (
+            <button type="button" className="ui-disclose" onClick={() => set({ thickness: undefined })}>
+              {C.thicknessAuto}
+            </button>
+          )}
         </Section>
       </div>
     </Popover>

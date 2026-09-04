@@ -56,7 +56,7 @@ export function computeLayout(entries: Entry[]): ShelfLayout {
       months.push({ key: m, index: i, x, end: x })
     }
     if (y !== prevYear) years.push({ year: y, index: i, x })
-    const w = spineWidth(e.stats.pages, e.stats.words)
+    const w = e.cover.thickness ?? spineWidth(e.stats.pages, e.stats.words)
     slots.push({ kind: 'book', id: e.id, entry: e, x, w, cx: x + w / 2, month: m })
     xs[i] = x
     centers[i] = x + w / 2

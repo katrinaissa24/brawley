@@ -98,8 +98,12 @@ export const db = {
     if (file.size > 25 * 1024 * 1024) throw new ImageTooLargeError('too large')
     const bmp = await decode(file)
     const keepPng = file.type === 'image/png' || file.type === 'image/gif' || file.type === 'image/webp'
-    const full = await scaled(bmp, MAX_SIDE, keepPng ? 'image/png' : 'image/jpeg', 0.86)
-    const thumb = await scaled(bmp, THUMB_SIDE, 'image/jpeg', 0.8)
+    // encode full + thumb concurrently — the actual pixel encode runs off the JS thread in the browser's
+    // codec, so awaiting them one at a time serializes work that could otherwise overlap
+    const [full, thumb] = await Promise.all([
+      scaled(bmp, MAX_SIDE, keepPng ? 'image/png' : 'image/jpeg', 0.86),
+      scaled(bmp, THUMB_SIDE, 'image/jpeg', 0.8),
+    ])
     bmp.close?.()
     const rec: StoredImage = {
       id: nanoid(12),

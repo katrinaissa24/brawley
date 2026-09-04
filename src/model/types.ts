@@ -79,6 +79,7 @@ export interface Cover {
   finish: 'matte' | 'cloth' | 'linen'
   imageId?: Id // front-cover picture (stored in images with entryId; never GC'd while referenced)
   spine: 'title' | 'initial' | 'blank'
+  thickness?: number // px spine width, user override; undefined = auto from stats via spineWidth()
 }
 
 /* ---------- entries ---------- */

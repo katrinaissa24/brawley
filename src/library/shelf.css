@@ -22,7 +22,7 @@
   --paper-noise: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='96' height='96'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 .2 0 0 0 0 .15 0 0 0 0 .1 0 0 0 .07 0'/></filter><rect width='96' height='96' filter='url(%23n)'/></svg>");
   --cloth-noise: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='6' height='6'><path d='M0 3h6M3 0v6' stroke='rgba(0,0,0,.09)' stroke-width='1'/></svg>");
   --linen-noise: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4'><path d='M0 2h4' stroke='rgba(255,255,255,.10)' stroke-width='1'/><path d='M2 0v4' stroke='rgba(0,0,0,.06)' stroke-width='1'/></svg>");
-  --page-lines: repeating-linear-gradient(90deg, var(--rule) 0 1px, var(--paper) 1px 2.5px);
+  --page-lines: repeating-linear-gradient(90deg, var(--paper) 0 3px, var(--rule) 3px 4px);
   --pill-shadow: 0 2px 8px rgba(var(--shadow-ink), 0.12);
   position: absolute; inset: 0;
   overflow: hidden;
@@ -251,7 +251,7 @@ html[data-theme="dark"] .shelf[data-evening] .shelf__wall {
   top: calc(var(--cover-w) / -2);
   transform: translateZ(calc(var(--cover-w) / -2)) rotateX(-90deg);
   border: 2px solid var(--bk-cover); border-top: 0;
-  background: linear-gradient(rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0.18)), var(--page-lines);
+  background: linear-gradient(rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.06)), var(--page-lines);
   background-clip: padding-box;
 }
 /* the one shadow: a gradient face lying 1px above the plank; grows and darkens with the pull-out */
