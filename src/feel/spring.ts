@@ -32,7 +32,7 @@ export function animateSpring(o: {
   let raf = 0
   const step = () => {
     const now = performance.now()
-    let dt = Math.min((now - last) / 1000, 0.064) / MOTION.speed
+    let dt = Math.min((now - last) / 1000, 0.064) * MOTION.speed // speed < 1 slows the world down
     last = now
     while (dt > 0) {
       const h = Math.min(dt, 1 / 120)

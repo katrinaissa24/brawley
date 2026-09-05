@@ -4,6 +4,8 @@
    so JS can write --pick per frame (pickup spring) and keyframes can animate --dip (detent bump). */
 @property --pull { syntax: '<number>'; inherits: true; initial-value: 0; }
 @property --breathe { syntax: '<number>'; inherits: false; initial-value: 0; }
+/* the slide a book makes to give a swung neighbour room, px (crowd.ts measures it) */
+@property --shove { syntax: '<number>'; inherits: false; initial-value: 0; }
 @property --press { syntax: '<number>'; inherits: false; initial-value: 0; }
 @property --dip { syntax: '<number>'; inherits: false; initial-value: 0; }
 @property --lift { syntax: '<number>'; inherits: false; initial-value: 0; }
@@ -155,18 +157,22 @@ html[data-theme="dark"] .shelf[data-evening] .shelf__wall {
   position: absolute; left: 50%;
   top: calc(var(--shelf-y) - var(--book-h) - 40px); height: calc(var(--book-h) + 48px);
   width: var(--w);
-  transform: translateX(var(--x));
-  transform-origin: 50% 50%;
+  /* a slot rides along with its book when the row gives way, so the pointer keeps its book */
+  transform: translateX(calc(var(--x) + var(--shove) * 1px));
+  transition: --shove 260ms var(--ease-out-expo);
   contain: strict; cursor: pointer; outline: none;
 }
-.shelf__hit[data-active] { transform: translateX(var(--x)) scaleX(1.6); z-index: 1; }
+/* the hovered slot grows over the opened cover (--reach: the room the next book made) */
+.shelf__hit[data-active] { transform: translateX(calc(var(--x) - 10px)); width: calc(var(--w) + 20px + var(--reach, 0px)); z-index: 1; }
 .shelf__hit:focus-visible { outline: none; }
 
 /* ---------- the book: one box, one transform ----------
    Spine at z = 0 facing the camera; the box extends back to z = -160. Faces are children; the root
-   never gets opacity / box-shadow / filter (DESIGN §7b). contain: layout style, never paint/strict. */
+   never gets opacity / box-shadow / filter (DESIGN §7b). contain: layout style, never paint/strict.
+   The hover pose (--hover-*) is written on the shelf root by Shelf.tsx from crowd.ts, which measures
+   from the same numbers how far the neighbours have to slide (--shove) to stay clear of the swung box. */
 .book {
-  --pull: 0; --breathe: 0; --press: 0; --dip: 0; --lift: 0; --recede: 0; --pick: 0;
+  --pull: 0; --breathe: 0; --shove: 0; --press: 0; --dip: 0; --lift: 0; --recede: 0; --pick: 0;
   --bk-cover: var(--bk-cover-base);
   --bk-cover-2: var(--bk-cover-2-base);
   --bk-ink: var(--bk-ink-base);
@@ -178,19 +184,21 @@ html[data-theme="dark"] .shelf[data-evening] .shelf__wall {
   pointer-events: none;
   transform:
     translate3d(
-      calc(var(--x) + var(--breathe) * 6px - var(--pick) * 80px),
+      calc(var(--x) + var(--shove) * 1px - var(--pick) * 80px),
       calc(var(--pull) * -10px + var(--dip) * 2px - var(--lift) * 1px - var(--pick) * 24px),
-      calc((1 - var(--pick)) * (var(--pull) * 44px + var(--breathe) * var(--breathe) * 8px - var(--press) * 4px - var(--recede) * 10px) + var(--pick) * 150px)
+      calc((1 - var(--pick)) * (var(--pull) * var(--hover-pull, 44px) + var(--breathe) * var(--breathe) * var(--hover-lift, 8px) - var(--press) * 4px - var(--recede) * 10px) + var(--pick) * 150px)
     )
-    rotateY(calc((1 - var(--pick)) * (var(--pull) * -22deg + var(--breathe) * -4deg) + var(--pick) * -90deg))
+    rotateY(calc((1 - var(--pick)) * (var(--pull) * -1 * var(--hover-swing, 22deg) + var(--breathe) * -1 * var(--hover-lean, 4deg)) + var(--pick) * -90deg))
     /* tip the head out of the row: the camera is almost level with the shelf, so this is what
        makes the text block visible at all — hook the top and the leaves come into view. */
-    rotateX(calc((1 - var(--pick)) * var(--pull) * -9deg))
+    rotateX(calc((1 - var(--pick)) * var(--pull) * -1 * var(--hover-tip, 9deg)))
     rotateZ(calc((1 - var(--pick)) * var(--jz)))
     scale(calc(1 - var(--press) * 0.015));
+  /* the row closes back slowly after it has given way; opening (below) is quick */
   transition:
     --pull 260ms var(--ease-out),
-    --breathe 400ms var(--ease-out),
+    --breathe 420ms var(--ease-out),
+    --shove 420ms var(--ease-out),
     --press 80ms var(--ease-out),
     --lift 200ms var(--ease-out),
     --recede 260ms var(--ease-out),
@@ -200,7 +208,19 @@ html[data-theme="dark"] .shelf[data-evening] .shelf__wall {
   --pull: 1;
   transition:
     --pull 300ms var(--ease-spring),
-    --breathe 400ms var(--ease-out),
+    --breathe 420ms var(--ease-out),
+    --shove 420ms var(--ease-out),
+    --press 80ms var(--ease-out),
+    --lift 200ms var(--ease-out),
+    --recede 260ms var(--ease-out),
+    --bk-cover 200ms linear, --bk-cover-2 200ms linear, --bk-ink 200ms linear;
+}
+/* a book being pushed aside moves ahead of the swing that pushes it: quick, no overshoot */
+.book[data-shoved] {
+  transition:
+    --pull 260ms var(--ease-out),
+    --breathe 260ms var(--ease-out-expo),
+    --shove 260ms var(--ease-out-expo),
     --press 80ms var(--ease-out),
     --lift 200ms var(--ease-out),
     --recede 260ms var(--ease-out),
@@ -351,7 +371,8 @@ html[data-theme="dark"] .book__shadow { opacity: calc(0.42 + var(--pull) * 0.18)
 .shelf__label {
   position: absolute; left: 50%;
   top: calc(var(--shelf-y) - var(--book-h) - 32px);
-  transform: translate(calc(var(--cx) - 50%), -100%);
+  transform: translate(calc(var(--cx) + var(--shove) * 1px - 50%), -100%);
+  transition: --shove 260ms var(--ease-out-expo);
   display: flex; align-items: center; gap: 8px;
   padding: 6px 12px; border-radius: 999px;
   background: var(--paper); border: 1px solid var(--rule); box-shadow: var(--pill-shadow);
@@ -386,7 +407,7 @@ html[data-theme="dark"] .book__shadow { opacity: calc(0.42 + var(--pull) * 0.18)
   transition: color 120ms linear, background-color 120ms linear;
 }
 .shelf__label__pencil:hover { color: var(--accent); background: var(--sel); }
-@keyframes shelf-label-in { from { opacity: 0; transform: translate(calc(var(--cx) - 50%), calc(-100% + 6px)) scale(0.92); } }
+@keyframes shelf-label-in { from { opacity: 0; transform: translate(calc(var(--cx) + var(--shove) * 1px - 50%), calc(-100% + 6px)) scale(0.92); } }
 @keyframes shelf-dot-in { from { opacity: 0; transform: translateY(6px) scale(0.92); } }
 @keyframes shelf-fade-out { to { opacity: 0; } }
 @keyframes shelf-fade-in { from { opacity: 0; } }
