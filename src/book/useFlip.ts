@@ -1,14 +1,15 @@
 /**
  * Flip controller: owns every 3D variable on the sheets (--a and --ax on the sheet + its two shades
- * + the two cast elements of its slot, data-live, data-flipping), the bend rig of a turning sheet
+ * + the two cast elements of its slot, data-live, data-flipping), the page mesh of a turning sheet
  * and the closed-block thickness. JS-driven in rAF (drag mapping, spring landing, spring flip);
  * CSS derives the flat-sheet shading from --a. React never touches these.
  *
  * Paper, not plastic. Three things make a turn read as a sheet of paper rather than a hinged card:
- *   · it bends. A turning sheet is split into four panels hinged spine -> fore-edge (`bend.ts`), and
- *     the outer three lean back by an amount that follows the sheet's own angular velocity through
- *     an underdamped spring — so the free edge trails a fast flip, sags when you hold it halfway,
- *     and flutters once as the page lands.
+ *   · it bends. A turning sheet becomes a mesh of vertical strips hinged edge to edge (`mesh.ts`)
+ *     whose curve follows the sheet's own motion through an underdamped spring — so the body hangs
+ *     from the finger that drags it, the fore-edge trails a flick, and the page slaps down and
+ *     settles after the gutter has landed. --a is the gutter's angle; the cast shadow beneath
+ *     follows the chord to the fore-edge instead, which is where the page actually is.
  *   · it carries momentum. Every flip is a spring, not a fixed tween: a flick throws the page and it
  *     lands hard, a slow drag sets it down slowly, and the release velocity decides which way it goes.
  *   · you can take it by the corner. Grabbing near the head or tail tilts the hinge axis (--ax) so
@@ -25,7 +26,7 @@ import { useMemo } from 'react'
 import { MOTION } from '@/feel/motion'
 import { sound } from '@/feel/sound'
 import { SPRINGS, animateSpring, tween } from '@/feel/spring'
-import { buildBend, releaseBend, writeBend, type BendRig } from './bend'
+import { buildMesh, releaseMesh, writeMesh, type MeshRig } from './mesh'
 import type { SheetEls } from './Sheet'
 
 export type Dir = 1 | -1
@@ -43,12 +44,18 @@ interface Flight {
   landed: boolean
   cancel: (() => void) | null
   extra?: (a: number) => void
-  /** the bending panels of this sheet, while it is in the air */
-  rig: BendRig | null
+  /** the bending strips of this sheet, while it is in the air */
+  rig: MeshRig | null
   /** where along the head-tail axis the sheet was taken: -1 head, 0 middle, +1 tail */
   grab: number
 }
 interface Drag { f: Flight; spineX: number; r: number; x0: number; y0: number; pointerId: number; samples: [number, number][] }
+/** A mesh still settling on a sheet that has already landed (the flight is over; the paper is not). */
+interface Settling { rig: MeshRig; a: number; dir: Dir; raf: number; t0: number }
+/** The bow is at rest below this, in degrees and degrees per second. */
+const SETTLED_BOW = 0.35
+const SETTLED_VEL = 4
+const SETTLE_MAX_MS = 700
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v))
 const D2R = Math.PI / 180
@@ -80,6 +87,7 @@ export class FlipController {
   maxSpread = 0
   sheetCount = 1
   inFlight: Flight[] = []
+  private settling: Settling[] = []
   private queue: { dir: Dir; ms?: number; silent?: boolean }[] = []
   private waiters: (() => void)[] = []
   private drag: Drag | null = null
@@ -93,18 +101,20 @@ export class FlipController {
   onReducedFlip: () => void = () => {}
 
   /* ---------- writes ---------- */
-  private writeVars(els: SheetEls, unders: Unders | null, a: number) {
+  /** `a` is the gutter angle; `chord` the angle of the line from the gutter to the fore-edge, which the cast shadow follows. */
+  private writeVars(els: SheetEls, unders: Unders | null, a: number, chord = a) {
     const s = a.toFixed(3) + 'deg'
     els.root.style.setProperty('--a', s)
     els.shadeF.style.setProperty('--a', s)
     els.shadeB.style.setProperty('--a', s)
-    if (unders) { unders.r.style.setProperty('--a', s); unders.l.style.setProperty('--a', s) }
+    const cs = chord.toFixed(3) + 'deg'
+    if (unders) { unders.r.style.setProperty('--a', cs); unders.l.style.setProperty('--a', cs) }
     if (!hasTrig) {
-      const sn = -Math.sin(a * D2R), c = Math.cos(a * D2R)
+      const sn = -Math.sin(a * D2R)
       els.shadeF.style.setProperty('--shade-f', (sn * 0.8).toFixed(3))
       els.shadeB.style.setProperty('--shade-b', (sn * 0.7).toFixed(3))
       if (unders) {
-        const o = sn.toFixed(3)
+        const o = (-Math.sin(chord * D2R)).toFixed(3), c = Math.cos(chord * D2R)
         unders.r.style.setProperty('--cast', o); unders.l.style.setProperty('--cast', o)
         unders.r.style.setProperty('--cast-r', Math.max(0, c).toFixed(3))
         unders.l.style.setProperty('--cast-l', Math.max(0, -c).toFixed(3))
@@ -112,16 +122,18 @@ export class FlipController {
     }
   }
   private writeAngle(f: Flight, raw: number) {
-    // the page lands against the block: the angle stops at the ends and the bend takes the energy
+    // the page lands against the block: the angle stops at the ends and the paper takes the energy
     const a = clamp(raw, -180, 0)
     f.a = a
-    this.writeVars(f.els, f.unders, a)
+    let chord = a
     if (f.rig) {
-      const arc = writeBend(f.rig, a, f.dir, performance.now())
+      const arc = writeMesh(f.rig, a, f.dir, performance.now())
+      chord = a + f.rig.tip
       // a tilted hinge is only legal mid-turn: at either end nothing but a gutter rotation leaves
-      // the sheet lying flat, so the tilt is scaled by the same arc as the bend
+      // the sheet lying flat, so the tilt is scaled by the same arc as the bow
       if (f.grab) f.els.root.style.setProperty('--ax', (AXIS_TILT * f.grab * Math.sqrt(arc)).toFixed(4))
     }
+    this.writeVars(f.els, f.unders, a, chord)
     f.extra?.(a)
     if (f.gated && !f.silent) {
       const p = f.dir === 1 ? -a : 180 + a // 0 at start .. 180 at the end of the turn
@@ -166,8 +178,10 @@ export class FlipController {
     let a = dir === 1 ? 0 : -180
     if (this.peek && this.peek.k === k) { this.peek.cancel(); a = this.peekAngle; this.peek = null }
     // the cover is a board and does not bend; reduced motion and the riffle (too fast to read, and
-    // not worth six clones per sheet) get the flat hinge too
-    const rig = k >= 0 && !MOTION.reduced && opts.bend !== false ? buildBend(els.root) : null
+    // not worth a mesh per sheet) get the flat hinge too. A mesh still settling on this sheet from
+    // its last landing is taken down first: the new one starts from flat.
+    this.unsettle(els.root)
+    const rig = k >= 0 && !MOTION.reduced && opts.bend !== false ? buildMesh(els.root) : null
     const f: Flight = {
       k, dir, a, slot, els, unders,
       silent: !!opts.silent, gated: !!opts.gated, lifted: false, landed: false, cancel: null,
@@ -185,8 +199,7 @@ export class FlipController {
   private endFlip(f: Flight, result: 'commit' | 'cancel') {
     f.cancel?.()
     f.cancel = null
-    releaseBend(f.rig)
-    f.rig = null
+    this.settle(f)
     delete f.els.root.dataset.flipping
     f.els.root.style.willChange = ''
     f.els.root.style.removeProperty('--ax')
@@ -203,6 +216,34 @@ export class FlipController {
     if (!this.inFlight.length && !this.queue.length) { const w = this.waiters; this.waiters = []; w.forEach(r => r()) }
   }
   private peekAngle = 0
+
+  /* ---------- the paper outlives the turn: let the bow settle on the landed sheet ---------- */
+  private settle(f: Flight) {
+    const rig = f.rig
+    f.rig = null
+    if (!rig) return
+    rig.held = false
+    if (Math.abs(rig.bow) < SETTLED_BOW && Math.abs(rig.vel) < SETTLED_VEL) { releaseMesh(rig); return }
+    const s: Settling = { rig, a: f.a, dir: f.dir, raf: 0, t0: performance.now() }
+    const step = () => {
+      const now = performance.now()
+      writeMesh(rig, s.a, s.dir, now)
+      const done = (Math.abs(rig.bow) < SETTLED_BOW && Math.abs(rig.vel) < SETTLED_VEL) || now - s.t0 > SETTLE_MAX_MS
+      if (done) { s.raf = 0; this.unsettle(rig.sheet); return }
+      s.raf = requestAnimationFrame(step)
+    }
+    s.raf = requestAnimationFrame(step)
+    this.settling.push(s)
+  }
+  private unsettle(sheet?: HTMLElement) {
+    for (let i = this.settling.length - 1; i >= 0; i--) {
+      const s = this.settling[i]
+      if (sheet && s.rig.sheet !== sheet) continue
+      if (s.raf) cancelAnimationFrame(s.raf)
+      releaseMesh(s.rig)
+      this.settling.splice(i, 1)
+    }
+  }
 
   /**
    * Programmatic (click / key / silent) flip. A spring rather than a tween, with a push to start it:
@@ -305,6 +346,7 @@ export class FlipController {
     const f = this.beginFlip(dir, { gated: true, grab: Math.abs(grab) > 0.34 ? grab : 0 })
     if (!f) return
     scene.setPointerCapture(e.pointerId)
+    if (f.rig) f.rig.held = true
     const spineX = rect.left
     const r = Math.max(40, Math.hypot(e.clientX - spineX, (e.clientY - mid) * 0.35))
     this.drag = { f, spineX, r, x0: e.clientX, y0: e.clientY, pointerId: e.pointerId, samples: [[e.timeStamp, f.a]] }
@@ -314,9 +356,10 @@ export class FlipController {
     if (!d || e.pointerId !== d.pointerId) return
     const { f, spineX, r } = d
     const fwd = (x: number) => -Math.acos(clamp((x - spineX) / r, -1, 1)) / D2R
-    const a = f.dir === 1 ? fwd(e.clientX) : -180 - fwd(2 * spineX - e.clientX)
-    this.writeAngle(f, a)
-    d.samples.push([e.timeStamp, a])
+    const finger = f.dir === 1 ? fwd(e.clientX) : -180 - fwd(2 * spineX - e.clientX)
+    // the finger holds the fore-edge; the gutter sits wherever the bowed page puts it
+    this.writeAngle(f, finger - (f.rig?.tip ?? 0))
+    d.samples.push([e.timeStamp, f.a])
     // keep a real time window rather than a fixed number of moves, so holding still reads as still
     while (d.samples.length > 2 && e.timeStamp - d.samples[0][0] > VELOCITY_WINDOW) d.samples.shift()
   }
@@ -326,6 +369,7 @@ export class FlipController {
     this.drag = null
     try { scene.releasePointerCapture(e.pointerId) } catch { /* already released */ }
     const { f, samples } = d
+    if (f.rig) f.rig.held = false
     const [t0, a0] = samples[0]
     const [t1, a1] = samples[samples.length - 1]
     // a pause before release ages the sample out of the window and the page is simply set down
@@ -385,8 +429,9 @@ export class FlipController {
   }
 
   dispose() {
-    for (const f of this.inFlight) { f.cancel?.(); releaseBend(f.rig); f.rig = null }
+    for (const f of this.inFlight) { f.cancel?.(); releaseMesh(f.rig); f.rig = null }
     this.inFlight = []
+    this.unsettle()
     this.queue = []
     this.peek?.cancel()
     this.peek = null

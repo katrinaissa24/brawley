@@ -78,13 +78,16 @@
 .ob--notrig .ob__face.-front > .ob__shade { opacity: var(--shade-f, 0); }
 .ob--notrig .ob__face.-back > .ob__shade { opacity: var(--shade-b, 0); }
 
-/* ---------- bend rig: the panels a turning sheet is folded into (see bend.ts) ----------
-   Panels nest, so their leans accumulate towards the fore-edge. Each panel carries its own pair of
-   page slices; the slices are 3D leaves (overflow hidden is allowed there) and the clones inside
-   them must not be back-face culled, since the verso slice is turned to face the other way. */
-.ob__bend { position: absolute; inset: 0; transform-style: preserve-3d; pointer-events: none; }
-.ob__pan {
-  position: absolute; top: 0;
+/* ---------- page mesh: the strips a turning sheet is folded into (see mesh.ts) ----------
+   Strips sit side by side inside the sheet's own frame, each placed and turned by JS so that it
+   starts where the previous one ends. Each strip carries a pair of page slices; the slices are 3D
+   leaves (overflow hidden is allowed there) and the clones inside them must not be back-face
+   culled, since the verso slice is turned to face the other way. While the mesh is up the sheet's
+   own flat faces are hidden, not removed, so their registry entries and shades stay put. */
+.ob__sheet[data-mesh] > .ob__face { visibility: hidden; }
+.ob__mesh { position: absolute; inset: 0; transform-style: preserve-3d; pointer-events: none; }
+.ob__strip {
+  position: absolute; left: 0; top: 0;
   transform-origin: 0 50%; transform-style: preserve-3d;
   will-change: transform;
 }
@@ -93,14 +96,16 @@
   backface-visibility: hidden; -webkit-backface-visibility: hidden;
 }
 .ob__pslice.-back { transform: rotateY(180deg); }
-.ob__pslice .ob__face { backface-visibility: visible; -webkit-backface-visibility: visible; }
+/* a cloned face keeps its classes (gutter side, number side) but not the verso's own half-turn:
+   the slice it sits in is the one that turns */
+.ob__pslice .ob__face { transform: none; backface-visibility: visible; -webkit-backface-visibility: visible; }
 .ob__pslice .ob__num, .ob__pslice .ob__ghost { pointer-events: none; }
-/* The fold shadow ramps across each panel from the value at its inner hinge (--s0) to the value at
-   its outer one (--s1). Consecutive panels share those endpoints, so the curve is continuous and
-   the panel seams do not band; both are 0 at the root hinge, where the un-clipped face takes over. */
+/* The light ramps across each strip from the shade at its gutter-side vertex (--s0) to the one at
+   its outer vertex (--s1). Consecutive strips share those vertices, so the shading is continuous
+   and the strip seams do not band. */
 .ob__pshade { position: absolute; inset: 0; pointer-events: none;
   background: linear-gradient(to right, rgba(var(--shadow-ink), var(--s0, 0)), rgba(var(--shadow-ink), var(--s1, 0))); }
-.ob__pslice.-back > .ob__pshade { /* the verso slice is turned, so its inner hinge is on the right */
+.ob__pslice.-back > .ob__pshade { /* the verso slice is turned, so its gutter side is on the right */
   background: linear-gradient(to left, rgba(var(--shadow-ink), var(--s0, 0)), rgba(var(--shadow-ink), var(--s1, 0))); }
 
 /* cast shadow on the pages beneath (a flat leaf, lifted .6px so it never z-fights the page) */

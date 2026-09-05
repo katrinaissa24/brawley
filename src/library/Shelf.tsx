@@ -18,6 +18,7 @@ import { SPRINGS, animateSpring, easeOutExpo, easeOutQuint } from '@/feel/spring
 import { S } from '@/copy/strings'
 import { shelfApi, type ShelfImpl } from './shelfApi'
 import { Book3D, GhostBook, type BookState } from './Book3D'
+import { HOVER, makeRoom, type Shove } from './crowd'
 import { LabelPill, type Snippet } from './LabelPill'
 import { MonthPill, type MonthPillHandle } from './MonthPill'
 import { Scrubber, type ScrubberHandle } from './Scrubber'
@@ -27,8 +28,11 @@ import './shelf.css'
 
 const SCROLL_KEY = 'folio.shelf.scroll'
 const DAY_MS = 86400000
-/** [offset from the hovered slot, --breathe amount] */
-const BREATHE: ReadonlyArray<readonly [number, number]> = [[-1, -1], [1, 1], [-2, -0.4], [2, 0.4]]
+/** The hover pose, published to the CSS so shelf.css and crowd.ts share one set of numbers. */
+const HOVER_VARS = {
+  '--hover-pull': `${HOVER.pull}px`, '--hover-swing': `${HOVER.swing}deg`, '--hover-tip': `${HOVER.tip}deg`,
+  '--hover-lean': `${HOVER.lean}deg`, '--hover-lift': `${HOVER.lift}px`,
+} as CSSProperties
 type HoverSource = 'mouse' | 'key' | 'program'
 
 interface LabelState { id: string; focus: boolean; out: boolean }
@@ -88,7 +92,7 @@ export function Shelf() {
   const els = useRef(new Map<string, HTMLElement>()).current
   const hidden = useRef(new Set<string>()).current
   const hov = useRef({
-    i: -1, id: '', nb: [] as [string, number][], source: 'mouse' as HoverSource,
+    i: -1, id: '', nb: [] as Shove[], shoveOf: new Map<string, Shove>(), source: 'mouse' as HoverSource,
     intent: 0, leave: 0, pending: -1, labelTimer: 0,
   }).current
   const press = useRef<Press | null>(null)
@@ -122,8 +126,13 @@ export function Shelf() {
 
   /* ---------- registry ---------- */
   const register = useCallback((id: Id, el: HTMLElement | null) => {
-    if (el) { els.set(id, el); el.style.visibility = hidden.has(id) ? 'hidden' : '' }
-    else els.delete(id)
+    if (el) {
+      els.set(id, el)
+      el.style.visibility = hidden.has(id) ? 'hidden' : ''
+      // a book scrolled into the window mid-hover joins the row where the row already is
+      const sv = hov.shoveOf.get(id)
+      if (sv) writeShove(el, sv)
+    } else els.delete(id)
   }, [])
   const setBookHidden = useCallback((id: Id, h: boolean) => {
     if (h) hidden.add(id)
@@ -132,6 +141,11 @@ export function Shelf() {
     if (el) el.style.visibility = h ? 'hidden' : ''
   }, [])
   const slotEl = (id: string) => hits.current?.querySelector<HTMLElement>(`[data-id="${CSS.escape(id)}"]`) ?? null
+  /** the slide a neighbour makes for the hovered book, on the box and on its hit slot alike */
+  const writeShove = (el: HTMLElement, s: Shove | null) => {
+    if (s) { el.setAttribute('data-shoved', ''); el.style.setProperty('--shove', s.shove.toFixed(2)); el.style.setProperty('--breathe', String(s.breathe)) }
+    else { el.removeAttribute('data-shoved'); el.style.setProperty('--shove', '0'); el.style.setProperty('--breathe', '0') }
+  }
   const spineRect = (id: string): Rect | null => {
     const f = els.get(id)?.querySelector<HTMLElement>('.book__spine')
     return f ? toRect(f.getBoundingClientRect()) : null
@@ -153,8 +167,14 @@ export function Shelf() {
     }
     if (hov.id) {
       els.get(hov.id)?.removeAttribute('data-hover')
-      for (const [id] of hov.nb) els.get(id)?.style.setProperty('--breathe', '0')
-      slotEl(hov.id)?.removeAttribute('data-active')
+      for (const s of hov.nb) {
+        const el = els.get(s.id)
+        if (el) writeShove(el, null)
+        slotEl(s.id)?.style.setProperty('--shove', '0')
+      }
+      hov.shoveOf.clear()
+      const hs = slotEl(hov.id)
+      if (hs) { hs.removeAttribute('data-active'); hs.style.removeProperty('--reach') }
     }
     hov.i = i
     hov.source = source
@@ -165,11 +185,19 @@ export function Shelf() {
       hov.id = slot.id
       const el = els.get(slot.id)
       if (el) { el.setAttribute('data-hover', ''); el.style.willChange = 'transform' }
-      for (const [d, amt] of BREATHE) {
-        const s = L.slots[i + d]
-        if (s) { hov.nb.push([s.id, amt]); els.get(s.id)?.style.setProperty('--breathe', String(amt)) }
+      // the row gives way: the swung box needs room on the side it turns toward (crowd.ts)
+      hov.nb = MOTION.reduced ? [] : makeRoom(L.slots, i)
+      let reach = 0
+      for (const s of hov.nb) {
+        hov.shoveOf.set(s.id, s)
+        const nel = els.get(s.id)
+        if (nel) writeShove(nel, s)
+        slotEl(s.id)?.style.setProperty('--shove', s.shove.toFixed(2))
+        if (L.indexOf.get(s.id) === i + 1) reach = s.shove
       }
-      slotEl(slot.id)?.setAttribute('data-active', '')
+      const hs = slotEl(slot.id)
+      // the hit slot grows to cover the opened cover, so the pointer can rest on it
+      if (hs) { hs.setAttribute('data-active', ''); hs.style.setProperty('--reach', `${reach.toFixed(1)}px`) }
       if (source === 'mouse') sound.shff()
       setLabel({ id: slot.id, focus: source === 'key', out: false })
     } else {
@@ -487,6 +515,7 @@ export function Shelf() {
     <div
       className="shelf"
       ref={root}
+      style={HOVER_VARS}
       data-evening={evening || undefined}
       data-away={away || undefined}
       data-searching={matches !== null || undefined}
@@ -544,7 +573,7 @@ export function Shelf() {
                     aria-label={a11y}
                     aria-description={!isGhost && matchSet?.has(s.id) ? S.shelf.a11y.match : undefined}
                     tabIndex={i === tabIdx ? 0 : -1}
-                    style={{ '--x': `${s.x - 3}px`, '--w': `${s.w + 6}px` } as CSSProperties}
+                    style={{ '--x': `${s.x - 3}px`, '--w': `${s.w + 6}px`, '--shove': (hov.shoveOf.get(s.id)?.shove ?? 0).toFixed(2) } as CSSProperties}
                   />
                 )
               })}
@@ -558,7 +587,7 @@ export function Shelf() {
                   </div>
                 ))}
               {matchSet && mounted.map(s => (s.kind === 'book' && matchSet.has(s.id) && s.id !== label?.id)
-                ? <LabelPill key={`m${s.id}`} compact cx={s.cx} title={s.entry.title.trim() || S.shelf.untitled} snippet={snippetFor(s.entry, query)} />
+                ? <LabelPill key={`m${s.id}`} compact cx={s.cx} shove={hov.shoveOf.get(s.id)?.shove} title={s.entry.title.trim() || S.shelf.untitled} snippet={snippetFor(s.entry, query)} />
                 : null)}
               {label && labelSlot && (
                 labelSlot.kind === 'ghost'

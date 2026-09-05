@@ -11,6 +11,8 @@ export interface Snippet { before: string; match: string; after: string }
 export interface LabelPillProps {
   /** content x of the spine centre */
   cx: number
+  /** how far the book has slid to make room for a hovered neighbour, px (compact pills follow it) */
+  shove?: number
   title: string
   /** long date line ('Wednesday, 3 September 2026'); omitted for the ghost slot */
   date?: string
@@ -30,7 +32,7 @@ export interface LabelPillProps {
 }
 
 export const LabelPill = memo(function LabelPill(p: LabelPillProps) {
-  const style = { '--cx': `${p.cx}px` } as CSSProperties
+  const style = { '--cx': `${p.cx}px`, '--shove': (p.shove ?? 0).toFixed(2) } as CSSProperties
   return (
     <div
       className="shelf__label"
