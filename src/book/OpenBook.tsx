@@ -1,7 +1,7 @@
 /**
  * OpenBook — surface 2. A fixed overlay scene: .ob (flat) > .ob__stage (perspective) > .ob__book
  * (preserve-3d: blocks, cast unders, the cover as sheet -1 and the sheet window cur-2..cur+2).
- * Flat layers (zones, ribbon, caption, menu) are siblings of the 3D tree. Handoffs (DESIGN §8):
+ * Flat layers (zones, caption, menu) are siblings of the 3D tree. Handoffs (DESIGN §8):
  * shelf -> here via store.handoff (2D clone flies, then the cover swings), here -> shelf via a
  * detached body clone built in the unmount cleanup. The FlipController owns every 3D variable.
  */
@@ -39,7 +39,6 @@ function coverVars(e: Entry) {
     '--cover-deep': HUES[e.cover.hue][2],
     '--cover-ink': INK[inkFor(hex)],
     '--endpaper': `color-mix(in srgb, ${hex} 12%, var(--paper))`,
-    '--ribbon': HUES[e.cover.hue][2],
   } as React.CSSProperties
 }
 /** A flat 2D closed-book card (cover colour/image + title band) used by both handoffs. */
@@ -233,7 +232,7 @@ export function OpenBook() {
     // The clone-flight branch hides the stage and un-hides it three awaits later; every early
     // return in between (and StrictMode's discarded first pass, which consumes the handoff before
     // the real run sees it) would otherwise leave the flag on for good — and with it the flat
-    // layers, so the flip zones, the ribbon and the caption all go dead while the spread, which
+    // layers, so the flip zones and the caption both go dead while the spread, which
     // re-declares its own visibility, still looks perfectly normal.
     return () => { alive = false; delete stg.dataset.hidden }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -411,9 +410,6 @@ export function OpenBook() {
   for (let k = Math.max(-1, cur - 2); k <= Math.min(sheetCount - 1, cur + 2); k++) sheets.push(k)
   if (!sheets.includes(-1) && spread < 0) sheets.unshift(-1)
   const title = entry.title.trim() || S.book.untitled
-  const ribbonPage = Math.min(entry.lastOpenedPage ?? 0, entry.pages.length - 1)
-  const ribbonOn = spread >= 0 && spreadOfPage(ribbonPage) === spread
-  const ribbonLeft = ribbonPage % 2 === 1 // odd pages are left pages
   const canFwd = spread >= 0 && spread < maxSpread
   const canBack = spread > 0
   const hoverZone = (dir: Dir, on: boolean) => () => { if (phase === 'open' && !bookRegistry.editorActive) ctl.setPeek(dir, on) }
@@ -461,8 +457,6 @@ export function OpenBook() {
           <div className="ob__zone -fwd" hidden={!canFwd} aria-label={S.book.nextPage} title={S.book.nextPage}
             onPointerDown={zoneDown(1)} onPointerEnter={hoverZone(1, true)} onPointerLeave={hoverZone(1, false)} />
         </div>
-        <div className="ob__ribbon" data-on={ribbonOn ? '' : undefined}
-          style={{ left: ribbonLeft ? `${size.w * 0.22}px` : `${size.w + size.w * 0.78 - 14}px` }} />
         <div className="ob__caption" aria-hidden="true">{title} · {formatLong(entry.date)}</div>
         <div ref={xfade} className="ob__xfade" />
       </div>

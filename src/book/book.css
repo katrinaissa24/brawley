@@ -213,11 +213,6 @@
 .ob__zone.-fwd { right: 0; }
 .ob__zone.-back { left: 0; }
 .ob__zone[hidden] { display: none; }
-.ob__ribbon { position: absolute; top: -3px; width: 14px; height: calc(100% + 26px); pointer-events: none;
-  background: var(--ribbon, var(--accent)); opacity: 0; transition: opacity 160ms var(--ease-out);
-  clip-path: polygon(0 0, 100% 0, 100% 100%, 50% calc(100% - 9px), 0 100%); }
-.ob__ribbon::before { content: ''; position: absolute; inset: 0; background: linear-gradient(to right, rgba(255,255,255,.18), transparent 50%, rgba(var(--shadow-ink), .25)); }
-.ob__ribbon[data-on] { opacity: .95; }
 .ob__caption { position: absolute; left: 0; right: 0; top: calc(100% + 22px); text-align: center;
   font: 13px/1.4 var(--ui); color: var(--muted); opacity: 0; transform: translateY(6px);
   transition: opacity 160ms var(--ease-out), transform 160ms var(--ease-out); pointer-events: none; white-space: nowrap;
@@ -252,4 +247,4 @@
 /* ---------- reduced motion ---------- */
 html[data-reduce-motion='on'] .ob__block { transition: none; }
 html[data-reduce-motion='on'] .ob__veil { transition-duration: 150ms; }
-html[data-reduce-motion='on'] .ob__caption, html[data-reduce-motion='on'] .ob__ribbon { transition-duration: 120ms; }
+html[data-reduce-motion='on'] .ob__caption { transition-duration: 120ms; }
