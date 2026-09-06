@@ -83,6 +83,7 @@ export function Shelf() {
 
   const root = useRef<HTMLDivElement>(null)
   const scroller = useRef<HTMLDivElement>(null)
+  const track = useRef<HTMLDivElement>(null)
   const row = useRef<HTMLDivElement>(null)
   const hits = useRef<HTMLDivElement>(null)
   const labels = useRef<HTMLDivElement>(null)
@@ -104,7 +105,7 @@ export function Shelf() {
 
   /* ---------- scroll loop ---------- */
   const ctrl = useShelfScroll({
-    root, scroller, layers: [row, hits, labels], layout: layoutRef,
+    root, scroller, track, layers: [row, hits, labels], layout: layoutRef,
     handlers: {
       onWindow: w => setWin(w),
       onCentre: (i, dir) => {
@@ -521,7 +522,8 @@ export function Shelf() {
       data-searching={matches !== null || undefined}
     >
       <div className="shelf__scroller" ref={scroller}>
-        <div className="shelf__track" style={{ '--row-w': `${layout.width}px` } as CSSProperties}>
+        {/* --row-w (the travel) is written by useShelfScroll: it depends on the viewport too */}
+        <div className="shelf__track" ref={track}>
           <div className="shelf__stage">
             <div className="shelf__wall" />
             <div className="shelf__row" ref={row} aria-hidden="true" onTransitionEnd={onRowTransitionEnd} onAnimationEnd={onRowAnimationEnd}>

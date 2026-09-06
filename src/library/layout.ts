@@ -1,7 +1,8 @@
 /**
  * Shelf layout: pure geometry from the ordered entries. Recomputed only when entries change.
  * Content x runs from 0 (first book) to `width` (right edge of the ghost slot). The focus line
- * (viewport centre) sits at content x == scrollLeft, so centring slot i means scrollLeft = centers[i].
+ * (viewport centre) sits at content x == base + scrollLeft (see scrollRange), so every consumer
+ * works in content x and useShelfScroll owns the conversion.
  */
 import { BOOK, spineWidth, type Entry, type Id } from '@/model/types'
 import { monthKey, yearOf } from '@/lib/dates'
@@ -126,3 +127,29 @@ export function jitter(id: string, salt = 0): number {
 }
 
 export const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v))
+
+/* ---------- scroll range ----------
+ * The row is the whole world: there is nothing to see left of the first book or right of the
+ * ghost slot, so the scroller is only ever allowed to travel far enough to bring both ends to
+ * within EDGE_PAD of the viewport edge. A row that already fits sits centred and does not scroll
+ * at all — which is why a handful of books have no left/right travel to give away.
+ *
+ * `base` is the content x that sits on the focus line (the viewport centre) at scrollLeft 0, so
+ * content x == base + scrollLeft; `travel` is the scroller's whole range (its --row-w).
+ */
+export const EDGE_PAD = 120
+
+export interface ShelfRange {
+  /** content x on the focus line at scrollLeft 0 */
+  base: number
+  /** scrollable travel in px (0 = the row fits and never scrolls) */
+  travel: number
+}
+
+export function scrollRange(contentW: number, vw: number): ShelfRange {
+  if (vw <= 0) return { base: contentW / 2, travel: 0 }
+  const pad = Math.min(EDGE_PAD, vw * 0.12)
+  const travel = contentW + pad * 2 - vw
+  if (travel <= 0) return { base: contentW / 2, travel: 0 }
+  return { base: vw / 2 - pad, travel }
+}

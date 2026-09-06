@@ -1,6 +1,6 @@
 /**
  * Sticker picker: a 320px paper popover with two tabs — Emoji (curated, searchable by keyword)
- * and Stickers (the 16 built-in SVGs in a 4×4 grid). Rendered into document.body beside its
+ * and Stickers (the built-in SVGs from stickers.ts, four to a row, scrolled). Rendered into document.body beside its
  * anchor; click outside or Esc closes; focus is trapped while open and restored on close.
  */
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'

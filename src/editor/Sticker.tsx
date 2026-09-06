@@ -1,6 +1,6 @@
 /**
- * Sticker artwork. Renders an emoji (font-size fitted to the box) or one of the 16 built-in
- * hand-drawn SVGs. The element fills whatever box its parent gives it (the StickerBlock sets
+ * Sticker artwork. Renders an emoji (font-size fitted to the box) or one of the built-in
+ * hand-drawn SVGs (STICKERS in stickers.ts is the manifest; every id there needs an arm in Art). The element fills whatever box its parent gives it (the StickerBlock sets
  * --w/--h); `w`/`h` are the block's cell size and drive the emoji font size. Inner art is
  * pointer-events: none so hits land on the block. No filters, masks or clip-paths (3D safety).
  */
@@ -56,7 +56,12 @@ function Art({ id, entry }: { id: StickerId; entry?: Entry }) {
     case 'washi-terracotta': return <WashiTerracotta />
     case 'washi-sage-dots': return <WashiSageDots />
     case 'washi-mustard': return <WashiMustard />
+    case 'washi-plum-check': return <WashiPlumCheck />
     case 'paper-clip': return <PaperClip />
+    case 'push-pin': return <PushPin />
+    case 'sticky-note': return <StickyNote />
+    case 'ribbon-bookmark': return <RibbonBookmark />
+    case 'ticket': return <Ticket />
     case 'star': return <Star />
     case 'star-cluster': return <StarCluster />
     case 'heart': return <Heart />
@@ -68,7 +73,14 @@ function Art({ id, entry }: { id: StickerId; entry?: Entry }) {
     case 'coffee-ring': return <CoffeeRing />
     case 'date-stamp': return <DateStamp entry={entry} />
     case 'sun': return <Sun />
+    case 'moon': return <Moon />
+    case 'cloud': return <Cloud />
     case 'leaf': return <Leaf />
+    case 'flower': return <Flower />
+    case 'sparkles': return <Sparkles />
+    case 'tick': return <Tick />
+    case 'speech-bubble': return <SpeechBubble />
+    case 'quote-mark': return <QuoteMark />
   }
 }
 
@@ -140,6 +152,24 @@ function WashiMustard() {
       </g>
       <path d="M6 3.5 L138 3.2" stroke={PAPER_HI} strokeOpacity="0.3" strokeWidth="1.5" strokeLinecap="round" />
       <path d="M8 29 L136 28.6" stroke={M[2]} strokeOpacity="0.28" strokeWidth="1.2" strokeLinecap="round" />
+    </Svg>
+  )
+}
+
+function WashiPlumCheck() {
+  const pid = useId()
+  return (
+    <Svg w={9} h={2} stretch>
+      <defs>
+        <pattern id={pid} width="16" height="16" patternUnits="userSpaceOnUse">
+          <rect x="0" y="0" width="16" height="6" fill={PAPER_HI} opacity="0.24" />
+          <rect x="0" y="0" width="6" height="16" fill={PAPER_HI} opacity="0.24" />
+        </pattern>
+      </defs>
+      <path d={TAPE_PATH} fill={P[1]} />
+      <path d={TAPE_PATH} fill={`url(#${pid})`} />
+      <path d="M6 3.5 L138 3.2" stroke={PAPER_HI} strokeOpacity="0.26" strokeWidth="1.5" strokeLinecap="round" />
+      <path d="M8 29 L136 28.6" stroke={P[2]} strokeOpacity="0.3" strokeWidth="1.2" strokeLinecap="round" />
     </Svg>
   )
 }
@@ -361,6 +391,159 @@ function Leaf() {
         <path d="M25 56 C 25.5 58.5, 26 60.5, 27 62" strokeWidth="2" />
       </g>
       <path d="M17 12 C 14 18, 12 26, 12.5 34" fill="none" stroke={D[0]} strokeOpacity="0.55" strokeWidth="1.6" strokeLinecap="round" />
+    </Svg>
+  )
+}
+
+function PushPin() {
+  return (
+    <Svg w={3} h={3}>
+      {/* the shaft first, so the head sits over its top */}
+      <path d="M24 26 L25.6 40 L23.4 45 L22.6 39.5 Z" fill={D[2]} stroke={D[2]} strokeWidth="0.8" strokeLinejoin="round" />
+      <circle cx="24" cy="17.5" r="11.5" fill={T[1]} stroke={T[2]} strokeWidth="1.4" />
+      <path d="M18.5 12 C 19.5 9, 22 7.3, 25 7.5" fill="none" stroke={PAPER_HI} strokeOpacity="0.55" strokeWidth="2.6" strokeLinecap="round" />
+    </Svg>
+  )
+}
+
+function StickyNote() {
+  return (
+    <Svg w={5} h={5}>
+      {/* a square that never quite is one, with the bottom-right corner turned up */}
+      <path d="M5.5 6.5 L74.5 4 L77 66.5 L60.5 76.5 L6 74.5 Z" fill={M[0]} stroke={M[1]} strokeWidth="1" strokeLinejoin="round" />
+      <path d="M77 66.5 L60.5 76.5 L62.5 66 Z" fill={M[1]} stroke={M[1]} strokeWidth="1" strokeLinejoin="round" />
+      <g fill="none" stroke={M[2]} strokeOpacity="0.42" strokeWidth="1.5" strokeLinecap="round">
+        <path d="M14 25 C 34 23.5, 52 25, 68 23.4" />
+        <path d="M14 39 C 34 37.5, 52 39, 68 37.4" />
+        <path d="M14 53 C 30 51.8, 44 53, 55 52" />
+      </g>
+    </Svg>
+  )
+}
+
+function RibbonBookmark() {
+  return (
+    <Svg w={2} h={5}>
+      <path d="M5 3.5 H27 V70.5 L16 60.5 L5 70.5 Z" fill={T[1]} stroke={T[2]} strokeWidth="1.4" strokeLinejoin="round" />
+      <path d="M9.5 9 V55" stroke={PAPER_HI} strokeOpacity="0.32" strokeWidth="2.2" strokeLinecap="round" />
+      <path d="M23 12 V58" stroke={T[2]} strokeOpacity="0.35" strokeWidth="1.2" strokeLinecap="round" />
+    </Svg>
+  )
+}
+
+function Ticket() {
+  return (
+    <Svg w={6} h={3}>
+      <rect x="4" y="8" width="88" height="32" rx="4" fill={L[0]} stroke={L[2]} strokeWidth="1.6" />
+      <path d="M67 9 V39" stroke={L[2]} strokeWidth="1.4" strokeDasharray="3 4.5" strokeLinecap="round" />
+      <g fill="none" stroke={L[2]} strokeOpacity="0.75" strokeWidth="1.8" strokeLinecap="round">
+        <path d="M13 20 C 28 19.2, 44 20.4, 57 19.6" />
+        <path d="M13 29 C 26 28.3, 38 29.3, 47 28.7" strokeOpacity="0.5" />
+      </g>
+      <circle cx="79.5" cy="24" r="6.5" fill="none" stroke={L[2]} strokeWidth="1.5" strokeDasharray="9 3" />
+    </Svg>
+  )
+}
+
+function Moon() {
+  return (
+    <Svg w={3} h={3}>
+      <path
+        d="M32 7 C 19 11, 11.5 22, 14.5 32.5 C 17.5 42, 28 46, 37 41.5 C 27 39.5, 20.5 31.5, 21.5 22.5 C 22.3 15.5, 26.5 10, 32 7 Z"
+        fill={M[1]} stroke={M[2]} strokeWidth="1.4" strokeLinejoin="round"
+      />
+      <g stroke={M[2]} strokeWidth="1.5" strokeLinecap="round">
+        <path d="M40 10 V16 M37 13 H43" />
+        <path d="M8.5 37 V41 M6.5 39 H10.5" />
+      </g>
+    </Svg>
+  )
+}
+
+function Cloud() {
+  return (
+    <Svg w={5} h={3}>
+      <path
+        d="M19 40 C 8.5 40, 4.5 32.5, 10 26.5 C 6.5 17.5, 15.5 11, 23 15.5 C 27 5.5, 42 5, 46 15.5 C 56 10.5, 67 18, 63.5 27 C 73.5 28, 74 39.5, 64 40 Z"
+        fill={L[0]} fillOpacity="0.5" stroke={L[2]} strokeWidth="2" strokeLinejoin="round"
+      />
+      <path d="M17 33 C 22 30.5, 28 30, 33 31.5" fill="none" stroke={PAPER_HI} strokeOpacity="0.5" strokeWidth="2" strokeLinecap="round" />
+    </Svg>
+  )
+}
+
+function Flower() {
+  const petals: React.ReactNode[] = []
+  for (let i = 0; i < 5; i++) {
+    petals.push(
+      <ellipse key={i} cx="24" cy="12.5" rx="7" ry="10.5" transform={`rotate(${i * 72} 24 24)`} fill={T[0]} stroke={T[2]} strokeWidth="1.3" />,
+    )
+  }
+  return (
+    <Svg w={3} h={3}>
+      {petals}
+      <circle cx="24" cy="24" r="6" fill={M[1]} stroke={M[2]} strokeWidth="1.3" />
+      <circle cx="21.8" cy="22" r="1.5" fill={M[0]} />
+    </Svg>
+  )
+}
+
+/** Four-pointed sparkles: one large, two trailing. */
+const SPARK_48 =
+  'M24 4 C 26.5 16.5, 31.5 21.5, 44 24 C 31.5 26.5, 26.5 31.5, 24 44 C 21.5 31.5, 16.5 26.5, 4 24 C 16.5 21.5, 21.5 16.5, 24 4 Z'
+
+function Sparkles() {
+  return (
+    <Svg w={3} h={3}>
+      <g transform="translate(-3 3) scale(0.84)">
+        <path d={SPARK_48} fill={M[1]} stroke={M[2]} strokeWidth="1.6" strokeLinejoin="round" />
+      </g>
+      <g transform="translate(30 0) scale(0.32)">
+        <path d={SPARK_48} fill={M[0]} stroke={M[2]} strokeWidth="4" strokeLinejoin="round" />
+      </g>
+      <g transform="translate(33 27) scale(0.24)">
+        <path d={SPARK_48} fill={M[0]} stroke={M[2]} strokeWidth="5" strokeLinejoin="round" />
+      </g>
+    </Svg>
+  )
+}
+
+function Tick() {
+  return (
+    <Svg w={3} h={3}>
+      <path
+        d="M7.5 25.5 C 12.5 27.5, 16.5 32.5, 19.5 39 C 24.5 26, 30.5 15.5, 41.5 8"
+        fill="none" stroke={G[2]} strokeWidth="4.6" strokeLinecap="round" strokeLinejoin="round"
+      />
+      <path d="M10 25 C 14 27, 17 30.5, 19 34" fill="none" stroke={G[0]} strokeOpacity="0.55" strokeWidth="1.4" strokeLinecap="round" />
+    </Svg>
+  )
+}
+
+function SpeechBubble() {
+  return (
+    <Svg w={5} h={4}>
+      <path
+        d="M11 6 C 6.5 6, 4 9, 4 13.5 V36 C 4 40.5, 6.5 43.5, 11 43.5 H20 L16.5 57 L31 43.5 H69 C 73.5 43.5, 76 40.5, 76 36 V13.5 C 76 9, 73.5 6, 69 6 Z"
+        fill="none" stroke={INK} strokeWidth="2.4" strokeLinejoin="round" strokeLinecap="round"
+      />
+      <g fill={INK}>
+        <circle cx="27" cy="25" r="3" />
+        <circle cx="40" cy="25" r="3" />
+        <circle cx="53" cy="25" r="3" />
+      </g>
+    </Svg>
+  )
+}
+
+function QuoteMark() {
+  const comma = 'M15 11 C 6.5 15.5, 2.5 23, 3.5 31.5 C 4.2 37.5, 8.5 40.5, 13 39 C 17.5 37.5, 19 32, 16.5 28 C 14.5 24.8, 11 24.2, 9 25 C 10 19.5, 12.5 15.5, 17 12.8 Z'
+  return (
+    <Svg w={3} h={3}>
+      <g fill={P[1]}>
+        <path d={comma} />
+        <path d={comma} transform="translate(23 0)" />
+      </g>
     </Svg>
   )
 }

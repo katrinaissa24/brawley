@@ -346,6 +346,11 @@
   grid-template-columns: repeat(4, 1fr);
   gap: 4px;
   justify-items: center;
+  max-height: 264px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 2px;
+  scrollbar-width: thin;
 }
 .ed-stickers__grid--svg [data-tip]::after { bottom: calc(100% + 2px); }
 .ed-stickers__cell {

@@ -384,6 +384,26 @@
 .ed-sel__edge[data-edge="n"] { top: -9px; }
 .ed-sel__edge[data-edge="s"] { bottom: -9px; }
 
+/* corner rotation zones: reach just past a corner and the block turns. Invisible on purpose —
+   the cursor is the affordance — and they sit under the resize handles, which keep the corners. */
+.ed-sel__rotz {
+  position: absolute;
+  width: 30px;
+  height: 30px;
+  pointer-events: auto;
+  cursor: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='26' height='26' viewBox='0 0 26 26'><g fill='none' stroke='white' stroke-width='4' stroke-linecap='round' stroke-linejoin='round'><path d='M19 9.5A7.5 7.5 0 1 0 20.5 14'/><path d='M20.5 5v5h-5'/></g><g fill='none' stroke='black' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'><path d='M19 9.5A7.5 7.5 0 1 0 20.5 14'/><path d='M20.5 5v5h-5'/></g></svg>") 13 13, grab;
+}
+.ed-sel__rotz[data-corner="nw"] { left: -30px; top: -30px; }
+.ed-sel__rotz[data-corner="ne"] { left: 100%; top: -30px; }
+.ed-sel__rotz[data-corner="se"] { left: 100%; top: 100%; }
+.ed-sel__rotz[data-corner="sw"] { left: -30px; top: 100%; }
+.ed-sel.is-dragging .ed-sel__rotz { pointer-events: none; }
+/* the nearest corner handle answers the hover, so the zone reads as part of that corner */
+.ed-sel__rotz[data-corner="nw"]:hover ~ .ed-sel__h[data-handle="nw"],
+.ed-sel__rotz[data-corner="ne"]:hover ~ .ed-sel__h[data-handle="ne"],
+.ed-sel__rotz[data-corner="se"]:hover ~ .ed-sel__h[data-handle="se"],
+.ed-sel__rotz[data-corner="sw"]:hover ~ .ed-sel__h[data-handle="sw"] { transform: scale(1.25); }
+
 /* rotation handle: a small ring above the top edge */
 .ed-sel__rot {
   position: absolute;

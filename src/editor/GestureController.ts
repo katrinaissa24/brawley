@@ -5,7 +5,8 @@
  * overlay, the alignment hairlines, the size badge and the dot-mask position; the store is
  * committed exactly once on pointerup (a drag is one undo step). Snapping is the hysteresis
  * magnet in snap.ts (5px in / 7px out, 0.35/frame ease while snapped; Alt disables; Shift
- * constrains the axis / frees the aspect / steps rotation). Text blocks move only via their grab
+ * constrains the axis / frees the aspect / steps rotation; rotation detents every 15°, from the
+ * ring above the frame or from any corner's rotate zone). Text blocks move only via their grab
  * handle or their selected frame; a plain click in text places the caret and never reaches here.
  * Keyboard nudge / delete / duplicate / reorder live here too so PageEditor just forwards keys.
  */
@@ -223,13 +224,14 @@ export class GestureController {
       let rot = g.startRot + deg(Math.atan2(p.y - cy, p.x - cx)) - g.startAngle
       rot = ((rot + 540) % 360) - 180
       if (L.shift) rot = Math.round(rot / 15) * 15
-      else if (!L.alt) { const near = Math.round(rot / 15) * 15; if (Math.abs(rot - near) < 4) rot = near }
+      else if (snap) { const near = Math.round(rot / 15) * 15; if (Math.abs(rot - near) < 4) rot = near }
       const prevRot = g.rot
       g.rot = Math.round(rot * 10) / 10
       g.el!.style.setProperty('--rot', g.rot + 'deg')
       this.session.selEl?.style.setProperty('--rot', g.rot + 'deg')
       this.badge(g, S.editor.rotation(g.rot))
-      if (Math.round(prevRot / 15) !== Math.round(g.rot / 15) && Math.abs(g.rot % 15) < 0.01) this.click()
+      // one detent per 15° step crossed — the same tick a move makes per grid cell
+      if (snap && Math.floor(prevRot / 15) !== Math.floor(g.rot / 15)) this.click()
     }
     // dots wake up around the pointer
     const pp = this.pagePoint(L.cx, L.cy, g)
