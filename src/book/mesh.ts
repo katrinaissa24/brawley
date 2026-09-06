@@ -9,23 +9,40 @@
  * because each strip starts where the previous one ends the arc length is always exactly the page
  * width: the paper never stretches, whatever shape it takes.
  *
- * Shape. The tangent angle along the page is B · P(u): u is the distance from the gutter (0..1),
- * B the fore-edge tangent's lean away from the gutter tangent (the bow, in degrees), and P a
- * curvature profile with zero curvature at both ends — the binding is a pin and the fore-edge is
- * free, neither carries a bending moment — that peaks a little inside the middle of the page,
- * where the moment from a distributed load peaks. That is what gives a page its broad, even bow
- * rather than a hinge and a flat lip.
+ * Shape. The tangent angle along the page is B·A(u) + S·G(u), u being the distance from the gutter
+ * (0..1) and the two profiles two ways a sheet can bend:
+ *   · A, the bow — the fore-edge leans B degrees away from the gutter's tangent, and the chord from
+ *     the gutter to the fore-edge leans with it. This is the mode that decides how much of a turn
+ *     is bend and how much is rotation. A is the integral of a curvature crest that is zero at
+ *     both ends (the binding is a pin, the fore-edge is free, neither carries a bending moment)
+ *     and peaks at u*, so A(0) = 0 and A(1) = 1.
+ *   · H, the hang — the shape a span takes when it is loaded between two held ends: H(0) = -1,
+ *     H(1) = +1, zero curvature at both ends, and — this is the point — mean zero, so it bellies
+ *     the middle of the page without moving the fore-edge off the chord the bow put it on. It is
+ *     the shape that puts an inflection in the page, and it is the difference between paper and a
+ *     curved plate.
+ * Two signs run through everything below: a positive bow leans the fore-edge back the way the page
+ * came from, and a positive hang bellies the page away from the block it is leaning over.
+ * The crest u* is not fixed: it starts out near the fore-edge, where a page first peels off the
+ * block, and travels back to the gutter by the end of the turn, where the page unrolls onto the
+ * far side. So the sheet is not one shape scaled up and down — it changes shape as it goes.
  *
- * Dynamics. The bow chases a target through an underdamped spring, and the target depends on
- * what is moving the page:
- *   · held by its edge (a drag), the body hangs between the pinned gutter and the finger: it lags
- *     the motion and it droops under gravity, more the flatter the page lies;
- *   · in free flight (a flick, a click), the fore-edge trails whatever momentum the page carries,
- *     and the tip droops toward the block it leans over.
- * The target fades out at the ends of the turn, where the sheet lies on the block. The block is
- * also a hard limit: no vertex may pass through the page beneath, so the bow is clamped to keep
- * the fore-edge above both blocks and the spring's velocity is killed when the clamp bites — the
- * slap of a landing page. The rig outlives the turn for as long as the bow takes to settle.
+ * Dynamics. B and S each chase a target through their own underdamped spring, and what they chase
+ * depends on where the page is being driven from:
+ *   · in free flight the page is driven at the binding, so the fore-edge trails: it lags the turn
+ *     and its own weight droops it toward the block it is passing over;
+ *   · held by the fore-edge it is driven at the other end, and the block underneath still carries
+ *     the rest of the sheet — so the paper leaves the binding at a shallower angle than the finger
+ *     and curls up to meet it. That is a page peeling off the block, and on the way down it is the
+ *     same thing mirrored: the binding lies down first and the fore-edge follows it.
+ *   · either way gravity's bending load is cos(a) — full when the page lies over a block, nil when
+ *     it stands upright — and it bellies the span toward whichever block is underneath;
+ *   · a page that has been bound never comes off the block quite flat, so a little bend is always
+ *     there for the rest to work on.
+ * The targets fade out at the ends of the turn, where the sheet lies on the block. The block is
+ * also a hard limit: no vertex may pass through the page beneath, so the whole shape is scaled back
+ * until every vertex clears and the springs lose most of their energy when it bites — the slap of a
+ * landing page. The rig outlives the turn for as long as the paper takes to settle.
  *
  * Light. Each vertex is lit by one light overhead and a little to the right (Lambert), plus the
  * shadow the gutter throws across the first half of a lifted page. Every strip carries a gradient
@@ -34,25 +51,46 @@
  */
 import { MOTION } from '@/feel/motion'
 
-/** Strips across a page: one per ~34px, never fewer than 10 nor more than 16. */
-const STRIP_PX = 34
-const MIN_STRIPS = 10
-const MAX_STRIPS = 16
-/** The bow spring: k / c for zeta ~0.62 — one soft overshoot, the way a sheet settles. */
-const K = 260
-const C = 20
-/** Degrees of bow per deg/s of turn. A quick click flip runs at 600-700 deg/s. */
-const TRAIL = 30
-/** Gravity: how far the tip droops (free) or the body hangs (held), deg, at the flattest. */
-const DROOP_FREE = 5
-const DROOP_HELD = 7
-const MAX_BOW = 30
+/** Strips across a page: one per ~30px, never fewer than 12 nor more than 20. */
+const STRIP_PX = 30
+const MIN_STRIPS = 12
+const MAX_STRIPS = 20
+/** The two springs: the bow is stiff and light, the sag a little slower. Both at zeta ~0.58 — one
+    soft overshoot, the way a sheet settles. */
+const K_BOW = 340
+const C_BOW = 21
+const K_SAG = 210
+const C_SAG = 17
+/** Where the curvature crest sits at the start and at the end of a turn, and how sharp it is. */
+const PEAK_OUT = 0.70
+const PEAK_IN = 0.30
+const PEAK_EXP = 4
+/** The sheet is free of both blocks once sin(pi p) passes this. */
+const LIFT_KNEE = 0.5
+/**
+ * What drives each mode, in degrees: `trail*` per 100 deg/s of turn (a click flip peaks around
+ * 550 deg/s, a flick higher; a drag is far slower), `grav*` at gravity's full bending load, `set`
+ * the bend the binding leaves in the paper. The signs are the whole story: free, the fore-edge
+ * trails the turn and droops (bow positive over the near block); held, the binding stays shallow
+ * and the paper curls up to the finger (bow negative over the near block). Both belly toward the
+ * block they lean over, which is a negative hang.
+ */
+const FREE = { trailBow: 4, trailSag: -1.2, gravBow: 10, gravSag: -6, set: 5 }
+const HELD = { trailBow: -4, trailSag: -3.3, gravBow: -18, gravSag: -13, set: 0 }
+/** How much of the hang's stiffness the page's own weight eats when it stands up (see below). */
+const BUCKLE = 0.62
+/** The belly the paper always carries, so the page is never a dead flat plate. */
+const SET_SAG = -2.2
+const MAX_BOW = 40
+const MAX_SAG = 24
+/** What the springs keep when the sheet lands against a block. */
+const LANDING_KEEP = 0.2
 /** The light: overhead, a little to the right; how dark a face turned edge-on to it gets, and how
     gently the darkening comes on (paper is matte and the room is bright: a page tilted a little
     stays white, only a page seen nearly edge-on goes grey). */
 const LIGHT_X = 0.22
-const LAMBERT = 0.42
-const LAMBERT_CURVE = 1.5
+const LAMBERT = 0.46
+const LAMBERT_CURVE = 1.4
 /** The gutter shadow: its depth at the binding and how far across the page it reaches. */
 const GUTTER_FRONT = 0.34
 const GUTTER_BACK = 0.28
@@ -66,25 +104,38 @@ const D2R = Math.PI / 180
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v))
 
 /**
- * The curvature profile, integrated once: P(u) = ∫0..u κ / ∫0..1 κ with κ(u) = u (1-u)^1.5,
- * which is zero at both ends and peaks at u = 0.4. Sampled at 1/64 steps.
+ * The bow profile A(u) = int(0..u) k / int(0..1) k for a curvature crest k(u) = u^a (1-u)^b that
+ * peaks at u* — zero at both ends, and its integral rises from 0 at the gutter to 1 at the
+ * fore-edge, so B really is the fore-edge's lean. Rebuilt each frame, since u* travels.
  */
-const PROFILE = (() => {
-  const n = 64
-  const p = new Float64Array(n + 1)
+const QN = 48
+const CUM = new Float64Array(QN + 1)
+function crest(uStar: number) {
+  const al = PEAK_EXP * uStar
+  const be = PEAK_EXP * (1 - uStar)
   let acc = 0
-  for (let i = 1; i <= n; i++) {
-    const u = (i - 0.5) / n
-    acc += u * Math.pow(1 - u, 1.5)
-    p[i] = acc
+  for (let i = 1; i <= QN; i++) {
+    const u = (i - 0.5) / QN
+    acc += Math.pow(u, al) * Math.pow(1 - u, be)
+    CUM[i] = acc
   }
-  for (let i = 0; i <= n; i++) p[i] /= acc
-  return p
-})()
-function profileAt(u: number): number {
-  const x = clamp(u, 0, 1) * 64
-  const i = Math.min(63, Math.floor(x))
-  return PROFILE[i] + (PROFILE[i + 1] - PROFILE[i]) * (x - i)
+  const inv = acc > 0 ? 1 / acc : 0
+  for (let i = 1; i <= QN; i++) CUM[i] *= inv
+}
+function bowAt(u: number): number {
+  const x = clamp(u, 0, 1) * QN
+  const i = Math.min(QN - 1, Math.floor(x))
+  return CUM[i] + (CUM[i + 1] - CUM[i]) * (x - i)
+}
+/**
+ * The hang profile: the slope of a span carrying a load between two held ends, normalised to +-1.
+ * H(u) = 6u^2 - 4u^3 - 1 is the slope of a simply supported beam under its own weight — zero
+ * curvature at both ends (nothing holds a moment there) and mean zero over the span, so it bellies
+ * the middle without dragging the fore-edge off the chord.
+ */
+function hangAt(u: number): number {
+  const x = clamp(u, 0, 1)
+  return 6 * x * x - 4 * x * x * x - 1
 }
 
 interface Slice { front: HTMLElement; back: HTMLElement }
@@ -98,12 +149,19 @@ export interface MeshRig {
   /** page width and strip width, px */
   w: number
   sw: number
-  /** the profile at the vertices (n+1) and at the strip midpoints (n) */
-  P: Float64Array
-  Pm: Float64Array
-  /** the bow (fore-edge tangent lean, deg) and its velocity */
+  /** the bow and hang profiles at the vertices (n+1) and at the strip midpoints (n) */
+  A: Float64Array
+  Am: Float64Array
+  G: Float64Array
+  Gm: Float64Array
+  /** the vertex chain in the sheet's own frame (n+1), rebuilt every frame */
+  X: Float64Array
+  Z: Float64Array
+  /** the bow (fore-edge lean, deg) and the hang (mid-page belly, deg), each with its velocity */
   bow: number
   vel: number
+  sag: number
+  svel: number
   /** the fore-edge's position angle relative to the gutter tangent, deg — where the tip actually is */
   tip: number
   /** true while a finger holds the fore-edge */
@@ -111,7 +169,6 @@ export interface MeshRig {
   lastA: number
   lastT: number
 }
-
 /* ---------- building ---------- */
 
 interface Extent { el: Element; x0: number; x1: number }
@@ -212,14 +269,22 @@ export function buildMesh(sheet: HTMLElement): MeshRig | null {
     strips.push(strip)
     shades.push({ front: f.shade, back: b.shade })
   }
-  const P = new Float64Array(n + 1)
-  const Pm = new Float64Array(n)
-  for (let i = 0; i <= n; i++) P[i] = profileAt(i / n)
-  for (let i = 0; i < n; i++) Pm[i] = profileAt((i + 0.5) / n)
+
+  // the hang profile never changes; the bow profile is rebuilt each frame, as its crest travels
+  const A = new Float64Array(n + 1)
+  const Am = new Float64Array(n)
+  const G = new Float64Array(n + 1)
+  const Gm = new Float64Array(n)
+  for (let i = 0; i <= n; i++) G[i] = hangAt(i / n)
+  for (let i = 0; i < n; i++) Gm[i] = hangAt((i + 0.5) / n)
 
   sheet.appendChild(root)
   sheet.dataset.mesh = ''
-  return { sheet, root, strips, shades, n, w, sw, P, Pm, bow: 0, vel: 0, tip: 0, held: false, lastA: 0, lastT: 0 }
+  return {
+    sheet, root, strips, shades, n, w, sw,
+    A, Am, G, Gm, X: new Float64Array(n + 1), Z: new Float64Array(n + 1),
+    bow: 0, vel: 0, sag: 0, svel: 0, tip: 0, held: false, lastA: 0, lastT: 0,
+  }
 }
 
 /** Take the mesh down and give the sheet its flat faces back. */
@@ -229,17 +294,39 @@ export function releaseMesh(rig: MeshRig | null) {
   rig.root.remove()
 }
 
+/** True once the paper has stopped moving: both modes are back to flat and still. */
+export function meshAtRest(rig: MeshRig, bowEps: number, velEps: number): boolean {
+  return Math.abs(rig.bow) < bowEps && Math.abs(rig.vel) < velEps
+    && Math.abs(rig.sag) < bowEps && Math.abs(rig.svel) < velEps
+}
+
 /* ---------- one frame ---------- */
 
-/** The fore-edge's position angle (deg, in the sheet's rotateY sense) for a bow of `bow`. */
-function tipAngle(rig: MeshRig, bow: number): number {
-  let x = 0, z = 0
-  for (let i = 0; i < rig.n; i++) {
-    const phi = bow * rig.Pm[i] * D2R
-    x += Math.cos(phi)
-    z -= Math.sin(phi)
+/** Walk the hinge chain for a given bow and sag, filling the vertex positions. */
+function chain(rig: MeshRig, bow: number, sag: number) {
+  const { n, sw, Am, Gm, X, Z } = rig
+  let x = 0
+  let z = 0
+  X[0] = 0
+  Z[0] = 0
+  for (let i = 0; i < n; i++) {
+    const r = (bow * Am[i] + sag * Gm[i]) * D2R
+    x += sw * Math.cos(r)
+    z -= sw * Math.sin(r)
+    X[i + 1] = x
+    Z[i + 1] = z
   }
-  return Math.atan2(-z, x) / D2R
+}
+
+/** How far (deg) the worst vertex of the current chain has passed through a block. */
+function through(rig: MeshRig, a: number): number {
+  let over = 0
+  for (let i = 1; i <= rig.n; i++) {
+    const c = a + Math.atan2(-rig.Z[i], rig.X[i]) / D2R
+    if (c > over) over = c
+    else if (-180 - c > over) over = -180 - c
+  }
+  return over
 }
 
 /**
@@ -252,45 +339,73 @@ export function writeMesh(rig: MeshRig, a: number, dir: 1 | -1, now: number): nu
   const dt = (rig.lastT ? clamp((now - rig.lastT) / 1000, 0.001, 0.05) : 0.016) * MOTION.speed
   const p = clamp(dir === 1 ? -a / 180 : (180 + a) / 180, 0, 1)
   const arc = Math.sin(Math.PI * p)
+  // how free the sheet is of the blocks: at either end of the turn it is lying on one of them, and
+  // paper that is lying down neither trails nor sags
+  const q = clamp(arc / LIFT_KNEE, 0, 1)
+  const lift = q * q * (3 - 2 * q)
+
+  // this instant's curvature crest, and the bow profile it integrates to
+  crest(PEAK_OUT + (PEAK_IN - PEAK_OUT) * p)
+  for (let i = 0; i <= rig.n; i++) rig.A[i] = bowAt(i / rig.n)
+  for (let i = 0; i < rig.n; i++) rig.Am[i] = bowAt((i + 0.5) / rig.n)
+
   if (dt > 0) {
-    const omega = (a - rig.lastA) / dt // deg/s
-    // held: the body lags the finger and hangs under its weight; free: the tip trails and droops
-    const target = rig.held
-      ? (omega / TRAIL - DROOP_HELD * Math.cos(a * D2R)) * arc
-      : (-omega / TRAIL + DROOP_FREE * Math.cos(a * D2R)) * arc
-    rig.vel += (-K * (rig.bow - clamp(target, -MAX_BOW, MAX_BOW)) - C * rig.vel) * dt
+    // everything the sheet is doing, the far side of the paper does a moment later
+    const trail = -((a - rig.lastA) / dt) * lift
+    // gravity's bending load: full when the page lies over a block, nil when it stands upright
+    const grav = Math.cos(a * D2R) * lift
+    // the other half of the page's weight. Standing up, it presses along the span instead of
+    // across it, and a limp strip in compression does not straighten — it buckles. So near
+    // upright, where the bending load has gone, the sheet's own weight amplifies whatever bend is
+    // already there instead, the way a leaned sheet of paper bellies out rather than standing
+    // straight. That is why a turning page is never flatter than at the moment it passes vertical.
+    const amp = 1 / (1 - BUCKLE * Math.abs(Math.sin(a * D2R)) * lift)
+    const m = rig.held ? HELD : FREE
+    const t = (trail / 100) * dir // + when the paper is lagging the turn, whichever way it turns
+    const bowT = (t * m.trailBow + m.set * lift) * dir + m.gravBow * grav
+    const sagT = ((t * m.trailSag + SET_SAG * lift) * dir + m.gravSag * grav) * amp
+    rig.vel += (-K_BOW * (rig.bow - clamp(bowT, -MAX_BOW, MAX_BOW)) - C_BOW * rig.vel) * dt
     rig.bow += rig.vel * dt
+    rig.svel += (-K_SAG * (rig.sag - clamp(sagT, -MAX_SAG, MAX_SAG)) - C_SAG * rig.svel) * dt
+    rig.sag += rig.svel * dt
   }
   rig.lastA = a
   rig.lastT = now
 
-  // the block beneath is a hard limit: the fore-edge (the vertex furthest from the gutter tangent)
-  // stays between the two blocks, and hitting one takes the spring's energy with it
-  let tip = tipAngle(rig, rig.bow)
-  const over = a + tip > 0 ? -a : a + tip < -180 ? -180 - a : null
-  if (over !== null && Math.abs(tip) > 1e-6) {
-    rig.bow *= over / tip
-    rig.vel = 0
-    tip = tipAngle(rig, rig.bow)
+  // the blocks are a hard limit: no vertex may pass through the pages beneath. Scale the whole
+  // shape back until the worst one clears; hitting a block takes most of the springs' energy too
+  chain(rig, rig.bow, rig.sag)
+  if (through(rig, a) > 0) {
+    let lo = 0
+    let hi = 1
+    for (let i = 0; i < 7; i++) {
+      const mid = (lo + hi) / 2
+      chain(rig, rig.bow * mid, rig.sag * mid)
+      if (through(rig, a) > 0.02) hi = mid
+      else lo = mid
+    }
+    rig.bow *= lo
+    rig.sag *= lo
+    rig.vel *= LANDING_KEEP
+    rig.svel *= LANDING_KEEP
+    chain(rig, rig.bow, rig.sag)
   }
-  rig.tip = tip
+  rig.tip = Math.atan2(-rig.Z[rig.n], rig.X[rig.n]) / D2R
 
-  // the chain: each strip starts where the previous ends, turned by the tangent at its middle
-  const bow = rig.bow
-  let x = 0, z = 0
+  // each strip is laid down where the last one ended, turned by the tangent at its own middle
+  const { n, X, Z, A, Am, G, Gm, bow, sag } = rig
   const sinA = -Math.sin(a * D2R) // how far the sheet is lifted off the block (0 flat, 1 upright)
   const shadeF = (u: number, deg: number) => shade(deg, 1, u, GUTTER_FRONT, sinA)
   const shadeB = (u: number, deg: number) => shade(deg, -1, u, GUTTER_BACK, sinA)
-  let s0f = shadeF(0, a), s0b = shadeB(0, a)
-  for (let i = 0; i < rig.n; i++) {
-    const phi = bow * rig.Pm[i]
-    rig.strips[i].style.transform = `translate3d(${x.toFixed(2)}px,0,${z.toFixed(2)}px) rotateY(${phi.toFixed(3)}deg)`
-    const r = phi * D2R
-    x += rig.sw * Math.cos(r)
-    z -= rig.sw * Math.sin(r)
-    const u1 = (i + 1) / rig.n
-    const deg1 = a + bow * rig.P[i + 1]
-    const s1f = shadeF(u1, deg1), s1b = shadeB(u1, deg1)
+  let s0f = shadeF(0, a)
+  let s0b = shadeB(0, a)
+  for (let i = 0; i < n; i++) {
+    const phi = bow * Am[i] + sag * Gm[i]
+    rig.strips[i].style.transform = `translate3d(${X[i].toFixed(2)}px,0,${Z[i].toFixed(2)}px) rotateY(${phi.toFixed(3)}deg)`
+    const u1 = (i + 1) / n
+    const deg1 = a + bow * A[i + 1] + sag * G[i + 1]
+    const s1f = shadeF(u1, deg1)
+    const s1b = shadeB(u1, deg1)
     const { front, back } = rig.shades[i]
     front.style.setProperty('--s0', s0f.toFixed(3))
     front.style.setProperty('--s1', s1f.toFixed(3))

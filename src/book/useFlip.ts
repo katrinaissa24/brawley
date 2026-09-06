@@ -26,7 +26,7 @@ import { useMemo } from 'react'
 import { MOTION } from '@/feel/motion'
 import { sound } from '@/feel/sound'
 import { SPRINGS, animateSpring, tween } from '@/feel/spring'
-import { buildMesh, releaseMesh, writeMesh, type MeshRig } from './mesh'
+import { buildMesh, meshAtRest, releaseMesh, writeMesh, type MeshRig } from './mesh'
 import type { SheetEls } from './Sheet'
 
 export type Dir = 1 | -1
@@ -52,7 +52,7 @@ interface Flight {
 interface Drag { f: Flight; spineX: number; r: number; x0: number; y0: number; pointerId: number; samples: [number, number][] }
 /** A mesh still settling on a sheet that has already landed (the flight is over; the paper is not). */
 interface Settling { rig: MeshRig; a: number; dir: Dir; raf: number; t0: number }
-/** The bow is at rest below this, in degrees and degrees per second. */
+/** The paper is at rest below this, in degrees and degrees per second. */
 const SETTLED_BOW = 0.35
 const SETTLED_VEL = 4
 const SETTLE_MAX_MS = 700
@@ -223,12 +223,12 @@ export class FlipController {
     f.rig = null
     if (!rig) return
     rig.held = false
-    if (Math.abs(rig.bow) < SETTLED_BOW && Math.abs(rig.vel) < SETTLED_VEL) { releaseMesh(rig); return }
+    if (meshAtRest(rig, SETTLED_BOW, SETTLED_VEL)) { releaseMesh(rig); return }
     const s: Settling = { rig, a: f.a, dir: f.dir, raf: 0, t0: performance.now() }
     const step = () => {
       const now = performance.now()
       writeMesh(rig, s.a, s.dir, now)
-      const done = (Math.abs(rig.bow) < SETTLED_BOW && Math.abs(rig.vel) < SETTLED_VEL) || now - s.t0 > SETTLE_MAX_MS
+      const done = meshAtRest(rig, SETTLED_BOW, SETTLED_VEL) || now - s.t0 > SETTLE_MAX_MS
       if (done) { s.raf = 0; this.unsettle(rig.sheet); return }
       s.raf = requestAnimationFrame(step)
     }
