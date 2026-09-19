@@ -27,6 +27,7 @@ export const KEYS: Record<Surface, readonly KeyRow[]> = {
     row(['⇧⌘Z'], K.redo),
     row(['Esc'], K.back),
     row(['⇧⌘O'], K.reopen),
+    row(['⌘S'], K.save),
     row(['?'], K.sheet),
   ],
   shelf: [
@@ -80,6 +81,8 @@ export interface GlobalKeyHandlers {
   canToday(): boolean
   /** True while a popover/sheet is open (single-key chords stay quiet). */
   isBusy(): boolean
+  /** ⌘S: write the journal folder now, or hand the browser the download. */
+  saveJournal(): void
 }
 
 /**
@@ -101,6 +104,7 @@ export function useGlobalKeys(h: GlobalKeyHandlers) {
         if (k === 'k' && !e.shiftKey) { e.preventDefault(); h.focusSearch(); return }
         if (key === ',' && !e.shiftKey) { e.preventDefault(); h.openSettings(); return }
         if (k === 'o' && e.shiftKey) { e.preventDefault(); h.reopenLastClosed(); return }
+        if (k === 's' && !e.shiftKey) { e.preventDefault(); h.saveJournal(); return }
         return
       }
       if (e.altKey || typing) return

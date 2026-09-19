@@ -5,6 +5,7 @@
  */
 import { useMemo, useRef } from 'react'
 import { useEntry, useStore } from '@/model/store'
+import { journalFile } from '@/lib/journalFile'
 import { shelfApi } from '@/library/shelfApi'
 import { flip } from '@/book/flip'
 import { S } from '@/copy/strings'
@@ -25,6 +26,7 @@ export function TopBar() {
   const popover = useStore(s => s.popover)
   const entries = useStore(s => s.entries)
   const order = useStore(s => s.order)
+  const journal = useStore(s => s.journal)
   const search = useRef<SearchHandle>(null)
   const gear = useRef<HTMLButtonElement>(null)
   const todayBtn = useRef<HTMLButtonElement>(null)
@@ -77,6 +79,11 @@ export function TopBar() {
       return s.route.view === 'shelf' && !s.popover
     },
     isBusy() { return !!useStore.getState().popover },
+    saveJournal() {
+      const j = useStore.getState().journal
+      if (j.mode !== 'download' && j.mode !== 'folder') return
+      void journalFile.save().then(() => { if (j.mode === 'download') useStore.getState().toast(S.ui.settings.saved(j.name ?? '')) })
+    },
   }), [])
   useGlobalKeys(handlers)
 
@@ -94,7 +101,9 @@ export function TopBar() {
       <header className="ui-topbar" data-view={route.view} aria-label={S.ui.a11y.topbar}>
         <div className="ui-topbar__side ui-topbar__side--left">
           {route.view === 'shelf' ? (
-            <span className="ui-wordmark">{T.wordmark}</span>
+            <button type="button" className="ui-wordmark" title={T.frontPage} aria-label={T.frontPage} onClick={() => useStore.getState().setFront(true)}>
+              {T.wordmark}
+            </button>
           ) : (
             <>
               <button type="button" className="ui-capsule ui-back" onClick={onBack}>
@@ -112,6 +121,18 @@ export function TopBar() {
         </div>
 
         <div className="ui-topbar__side ui-topbar__side--right">
+          {journal.mode === 'download' && (
+            <button
+              type="button"
+              className="ui-capsule ui-save"
+              data-unsaved={journal.unsaved || undefined}
+              title={journal.unsaved ? S.ui.settings.saveUnsavedTip : S.ui.settings.saveTip}
+              onClick={handlers.saveJournal}
+            >
+              <span className="ui-save__dot" aria-hidden="true" />
+              <span>{S.ui.settings.save}</span>
+            </button>
+          )}
           <SearchField ref={search} />
           <span className="ui-tipwrap ui-tipwrap--right">
             <button

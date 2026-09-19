@@ -223,11 +223,27 @@
 /* ---------- flat layers over the spread (siblings of .ob__book; never inside the 3D tree) ---------- */
 .ob__hits { position: absolute; inset: 0 -24px; pointer-events: none; }
 .ob__zone { position: absolute; top: 0; bottom: 0; width: calc(max(var(--page-w) * 0.12, 44px) + 24px);
-  pointer-events: auto; touch-action: none;
-  cursor: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'><path d='M4 4h16v16H4z' fill='%23ffffff' stroke='%231a1a19' stroke-width='1.2'/><path d='M20 20H10c0-5.5 4.5-10 10-10z' fill='%23e7e4dd' stroke='%231a1a19' stroke-width='1.2' stroke-linejoin='round'/></svg>") 12 12, pointer; }
-.ob__zone.-fwd { right: 0; }
-.ob__zone.-back { left: 0; }
+  pointer-events: auto; touch-action: none; }
+/* the cursor says which way the page will go: a quiet chevron in a paper disc */
+.ob__zone.-fwd { right: 0; cursor: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='36' height='36' viewBox='0 0 36 36'><circle cx='18' cy='18' r='14' fill='white' fill-opacity='.96' stroke='rgba(26,26,25,.22)'/><path d='M15 11l7 7-7 7' fill='none' stroke='%231a1a19' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/></svg>") 18 18, pointer; }
+.ob__zone.-back { left: 0; cursor: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='36' height='36' viewBox='0 0 36 36'><circle cx='18' cy='18' r='14' fill='white' fill-opacity='.96' stroke='rgba(26,26,25,.22)'/><path d='M21 11l-7 7 7 7' fill='none' stroke='%231a1a19' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/></svg>") 18 18, pointer; }
 .ob__zone[hidden] { display: none; }
+
+/* ---------- page arrows (flat, either side of the spread) ---------- */
+.ob__arrow { position: absolute; top: 50%; width: 40px; height: 40px; margin-top: -20px; border-radius: 999px;
+  display: grid; place-items: center; color: var(--muted);
+  background: color-mix(in srgb, var(--paper) 92%, transparent); box-shadow: 0 1px 2px rgba(var(--shadow-ink), .06), 0 4px 14px -4px rgba(var(--shadow-ink), .25), inset 0 0 0 1px var(--rule);
+  opacity: 0; transform: translateY(4px);
+  transition: opacity 200ms var(--ease-out), transform 200ms var(--ease-out), color 120ms, background 120ms; }
+.ob__arrow.-back { right: calc(100% + 28px); }
+.ob__arrow.-fwd { left: calc(100% + 28px); }
+.ob[data-ready] .ob__arrow { opacity: .8; transform: none; }
+.ob__arrow:hover { opacity: 1; color: var(--fg); background: var(--paper); }
+.ob__arrow:active { transform: scale(.94); }
+.ob__arrow[hidden] { display: none; }
+.ob__arrow svg { width: 16px; height: 16px; }
+.ob__arrow:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+@media (max-width: 1100px) { .ob__arrow.-back { right: calc(100% + 8px); } .ob__arrow.-fwd { left: calc(100% + 8px); } }
 .ob__caption { position: absolute; left: 0; right: 0; top: calc(100% + 22px); text-align: center;
   font: 13px/1.4 var(--ui); color: var(--muted); opacity: 0; transform: translateY(6px);
   transition: opacity 160ms var(--ease-out), transform 160ms var(--ease-out); pointer-events: none; white-space: nowrap;

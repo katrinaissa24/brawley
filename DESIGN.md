@@ -5,8 +5,14 @@ contract for anyone (human or agent) building inside it. Read it fully, then rea
 are implementing under `docs/specs/` (they contain the exact numbers, recipes and code sketches).
 Where this file and a spec disagree, **this file wins**.
 
-## 0. The three surfaces
+## 0. The three surfaces (and the cover)
 
+0. **Front page** — the cover of the app (`src/landing/`): nav, hero with a shelf, the scroll story,
+   marquee, four feature panels, the product demo, quotes, the closing call. It is also the way in:
+   no account — the reader picks a file on their own disk and the journal lives there (§5b). Shown
+   until a journal is set up (`store.journal.mode` is `unset` or `needs-permission`), and again on
+   request (`store.front`, from Settings or the wordmark). Its own palette and type, scoped under
+   `.landing`, classes prefixed `ld-`; always light.
 1. **Shelf** — every entry as a standing 3D book, side by side on a wooden shelf, scrolled horizontally.
    Hover pulls a book out and shows a label pill. Click opens it.
 2. **Book** — the opened book: a two-page spread with 3D page flips (drag, click the edge, arrow keys).
@@ -58,6 +64,9 @@ src/
   feel/sound.ts                WebAudio engine (API frozen)                        (lead)
   feel/spring.ts, feel/motion.ts  spring integrator, MOTION flags                 (lead)
   copy/strings.ts              all UI copy                                        (chrome agent)
+  lib/journalFile.ts           the journal folder on disk: File System Access, mirror of IDB (§5b)
+  landing/                     Landing (page + the way in), HeroShelf, Story, Demo, landing.css,
+                               assets/desk.jpg                                    (landing agent)
   library/                     Shelf, Book3D, ShelfScroller, LabelPill, MonthPill,
                                Scrubber, CoverInspector, shelf.css                (shelf agent)
   book/                        OpenBook scene, Sheet, flip controller, Endpaper,
@@ -107,6 +116,9 @@ Each agent owns only its directory (plus the files listed). CSS classes are pref
 - `saveState: 'idle'|'pending'|'saving'|'saved'|'failed'`, `flushSave()`.
 - `toast(msg, {undo?: () => void, ms?})`, `toasts`, `dismissToast(id)`.
 - `searchQuery`, `setSearch(q)`, `searchMatches: Set<Id>` (title + page text, debounced in the chrome).
+- `journal: JournalStatus`, `setJournal(j)` — where the journal lives (§5b); `front`, `setFront(on)` — the
+  front page shown over the app on request. `load()` flushes pending saves before it reads, so a re-read
+  after a journal swap never loses an entry that is still in the autosave queue.
 
 ## 5. DB contract (frozen — `src/lib/db.ts`)
 
@@ -114,6 +126,38 @@ Each agent owns only its directory (plus the files listed). CSS classes are pref
 `db.importImage(file, entryId) → Promise<StoredImage>` (downscale to 2048px, 320px thumb, EXIF-rotated),
 `db.getImageBlob(id, 'full'|'thumb')`, `imageUrls.acquire(id, q) → Promise<string>` / `release(id, q)`,
 `useImageUrl(id, q)` hook, `db.exportJSON()`, `db.importJSON(file)`, `db.wipe()`.
+
+Additive since v0.1: `dbEvents.subscribe(fn)` fires after every write to entries, images or the sticker
+list (never settings); `db.clearJournal()` empties exactly those (not settings, not the remembered folder);
+`db.allEntries()`, `db.allImages()`, `db.replaceEntries(list)`, `db.putImageFromBlob(meta, blob, quiet?)`
+and `db.deleteImageQuiet(id)` are the folder's view of the store; `db.importJSON(data, {quiet})` skips the
+change event.
+
+## 5b. The journal folder (`src/lib/journalFile.ts`)
+
+No accounts and no server: the journal is a folder the user chose. IndexedDB stays the working copy
+every module talks to; the folder is kept in step with it:
+
+```
+‹folder›/journal.json    entries, the sticker list, a manifest of the media (small; rewritten on change)
+‹folder›/media/‹id›.jpg  every picture and video, written once when it arrives, removed when nothing
+                         references it, never rewritten — a journal full of video costs one write per video
+```
+
+Every database change (`dbEvents`) schedules a reconcile (1.2s trailing, serialized, also on
+`visibilitychange` hidden / `pagehide`): journal.json rewritten, missing media written, orphans removed.
+The `FileSystemDirectoryHandle` is kept in kv `journalFolder` with a `{lastModified, size}` stamp of
+journal.json as last written or read, so a visit where nothing changed on disk reads nothing; a
+journal.json changed elsewhere wins and is read back in, media by id + size (only what is missing is read).
+
+Modes: `unset` (front page) · `needs-permission` (a remembered folder the browser wants one click for —
+the front page says "Welcome back" and names it) · `folder` · `download`. `download` is the path for
+browsers without the File System Access API (Safari, Firefox): the journal stays in IndexedDB and is
+saved as one JSON file with the media inside (the export format) on request — the Save journal capsule
+in the top bar, ⌘S, or Settings — and opened again from the front page or Settings with a file picker.
+`status.unsaved` lights the capsule; the tab warns before closing on unsaved changes.
+A change of mode is applied by whoever made it, after `store.load()`, never by the status subscription
+(otherwise the starter book can seed into a journal that is still being read in).
 
 ## 6. Sound contract (frozen — `src/feel/sound.ts`)
 

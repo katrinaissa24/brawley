@@ -30,6 +30,18 @@ function open() {
   return dbp
 }
 
+/* ---------- change events ----------
+ * Fired after every write to entries, images or the sticker list (never settings), so the journal
+ * file (src/lib/journalFile.ts) can mirror the database without any module having to know it exists. */
+const changeListeners = new Set<() => void>()
+function notify() { for (const l of changeListeners) l() }
+export const dbEvents = {
+  subscribe(fn: () => void) {
+    changeListeners.add(fn)
+    return () => { changeListeners.delete(fn) }
+  },
+}
+
 /* ---------- image pipeline ----------
  * Import is split so nothing the user waits on is behind an encode. prepareImage() takes the
  * display size from the file header, publishes the original blob under both quality slots and
@@ -162,6 +174,7 @@ export const db = {
   async putEntry(e: Entry) {
     const d = await open()
     await d.put('entries', e)
+    notify()
   },
   async deleteEntry(id: Id) {
     const d = await open()
@@ -170,6 +183,7 @@ export const db = {
     const imgs = await tx.objectStore('images').index('byEntry').getAllKeys(id)
     for (const k of imgs) await tx.objectStore('images').delete(k)
     await tx.done
+    notify()
   },
   async getKV<T = unknown>(key: string): Promise<T | undefined> {
     const d = await open()
@@ -224,6 +238,7 @@ export const db = {
         const d = await open()
         await d.put('images', rec)
         imageUrls.prime(id, 'full', full.blob)
+        notify()
         return rec
       } finally {
         bmp?.close?.()
@@ -251,6 +266,7 @@ export const db = {
         const rec: StoredImage = { id, entryId, blob: file, thumb: poster, mime: file.type, width, height, bytes: file.size, createdAt: Date.now() }
         const d = await open()
         await d.put('images', rec)
+        notify()
         return rec
       } finally {
         imageUrls.release(id, 'thumb')
@@ -270,6 +286,7 @@ export const db = {
   async putImage(rec: StoredImage) {
     const d = await open()
     await d.put('images', rec)
+    notify()
   },
   async getImage(id: Id): Promise<StoredImage | undefined> {
     const d = await open()
@@ -282,6 +299,12 @@ export const db = {
   async deleteImage(id: Id) {
     const d = await open()
     await d.delete('images', id)
+    notify()
+  },
+  /** deleteImage without the change event (the journal folder reading itself in) */
+  async deleteImageQuiet(id: Id) {
+    const d = await open()
+    await d.delete('images', id)
   },
   /** Remove images of an entry that no block and no cover references. */
   async gcImages(entry: Entry) {
@@ -290,7 +313,9 @@ export const db = {
     if (entry.cover.imageId) used.add(entry.cover.imageId)
     for (const p of entry.cover.design ? [...entry.pages, entry.cover.design] : entry.pages) for (const b of p.blocks) if (b.type === 'image') used.add(b.imageId)
     const keys = await d.getAllKeysFromIndex('images', 'byEntry', entry.id)
-    for (const k of keys) if (!used.has(k)) await d.delete('images', k)
+    let removed = false
+    for (const k of keys) if (!used.has(k)) { await d.delete('images', k); removed = true }
+    if (removed) notify()
   },
   async exportJSON(entryIds?: Id[]): Promise<ExportFile> {
     const d = await open()
@@ -310,28 +335,22 @@ export const db = {
     const stickers = entryIds ? undefined : ((await d.get('kv', 'stickers')) as CustomSticker[] | undefined)
     return { format: 'folio', version: 1, exportedAt: Date.now(), entries, images, ...(stickers?.length ? { stickers } : null) }
   },
-  /** Import a Folio export. Entries with the same id are replaced. Returns imported entries. */
-  async importJSON(data: ExportFile): Promise<Entry[]> {
+  /**
+   * Import a journal export. Entries with the same id are replaced. Returns imported entries.
+   * `quiet`: no change event — used when the journal file itself is being read in, so the read
+   * does not schedule a pointless write straight back.
+   */
+  async importJSON(data: ExportFile, opts?: { quiet?: boolean }): Promise<Entry[]> {
     if (data?.format !== 'folio') throw new Error('not a folio export')
     const d = await open()
-    for (const img of data.images) {
-      const blob = base64ToBlob(img.base64, img.mime)
-      let thumb: { blob: Blob }
-      if (img.mime.startsWith('video/')) {
-        thumb = { blob: (await videoPoster(blob)).poster }
-      } else {
-        const bmp = await decode(blob)
-        thumb = await scaled(bmp, THUMB_SIDE, 'image/jpeg', 0.8)
-        bmp.close?.()
-      }
-      await d.put('images', { id: img.id, entryId: img.entryId, blob, thumb: thumb.blob, mime: img.mime, width: img.width, height: img.height, bytes: blob.size, createdAt: Date.now() })
-    }
+    for (const img of data.images) await db.putImageFromBlob(img, base64ToBlob(img.base64, img.mime), true)
     for (const e of data.entries) await d.put('entries', e)
     if (data.stickers?.length) {
       const mine = ((await d.get('kv', 'stickers')) as CustomSticker[] | undefined) ?? []
       const have = new Set(mine.map(s => s.imageId))
       await d.put('kv', [...mine, ...data.stickers.filter(s => !have.has(s.imageId))], 'stickers')
     }
+    if (!opts?.quiet) notify()
     return data.entries
   },
   /* ---------- your own stickers ----------
@@ -351,10 +370,61 @@ export const db = {
     imageUrls.prime(id, 'full', png)
     const s: CustomSticker = { imageId: id, width, height, cut, createdAt: Date.now() }
     await db.putKV('stickers', [s, ...(await db.listStickers())])
+    notify()
     return s
   },
   async removeSticker(imageId: Id) {
     await db.putKV('stickers', (await db.listStickers()).filter(s => s.imageId !== imageId))
+    notify()
+  },
+  /* ---------- the journal folder's view of the database (src/lib/journalFile.ts) ---------- */
+  async allEntries(): Promise<Entry[]> {
+    return (await open()).getAll('entries')
+  },
+  /** every stored picture, video and sticker PNG (blobs come back lazily; nothing is decoded) */
+  async allImages(): Promise<StoredImage[]> {
+    return (await open()).getAll('images')
+  },
+  /** The entries store becomes exactly `entries`. No change event: this is the folder being read in. */
+  async replaceEntries(entries: Entry[]) {
+    const d = await open()
+    const tx = d.transaction('entries', 'readwrite')
+    await tx.store.clear()
+    for (const e of entries) await tx.store.put(e)
+    await tx.done
+  },
+  /**
+   * Store a picture or video whose full-size blob already exists (read from the journal folder or
+   * an export), making its thumb / poster here. `quiet` skips the change event.
+   */
+  async putImageFromBlob(meta: { id: Id; entryId: Id; mime: string; width: number; height: number }, blob: Blob, quiet = false): Promise<StoredImage> {
+    let thumb: Blob
+    if (meta.mime.startsWith('video/')) {
+      thumb = (await videoPoster(blob)).poster
+    } else {
+      const bmp = await decode(blob)
+      thumb = (await scaled(bmp, THUMB_SIDE, 'image/jpeg', 0.8)).blob
+      bmp.close?.()
+    }
+    const rec: StoredImage = { id: meta.id, entryId: meta.entryId, blob, thumb, mime: meta.mime, width: meta.width, height: meta.height, bytes: blob.size, createdAt: Date.now() }
+    const d = await open()
+    await d.put('images', rec)
+    if (!quiet) notify()
+    return rec
+  },
+  /**
+   * Everything that belongs to the journal (entries, pictures, your stickers) — not the device's
+   * settings, not the remembered journal folder. Used when another journal is opened in place of
+   * this one. Fires no change event: the caller is about to fill the database again.
+   */
+  async clearJournal() {
+    const d = await open()
+    const tx = d.transaction(['entries', 'images', 'kv'], 'readwrite')
+    await tx.objectStore('entries').clear()
+    await tx.objectStore('images').clear()
+    await tx.objectStore('kv').delete('stickers')
+    await tx.done
+    imageUrls.clear()
   },
   async wipe() {
     const d = await open()

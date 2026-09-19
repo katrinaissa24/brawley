@@ -4,6 +4,7 @@
  */
 import { create } from 'zustand'
 import { db } from '@/lib/db'
+import type { JournalStatus } from '@/lib/journalFile'
 import { nanoid } from '@/lib/ids'
 import { todayISO, monthKey } from '@/lib/dates'
 import { defaultCover } from './palette'
@@ -91,6 +92,12 @@ export interface AppState {
   popover: Popover | null
   openPopover(p: Popover): void
   closePopover(): void
+  /** where the journal lives (src/lib/journalFile.ts); the front page shows until it is a file or the browser */
+  journal: JournalStatus
+  setJournal(j: JournalStatus): void
+  /** the front page, opened on request from inside the app */
+  front: boolean
+  setFront(on: boolean): void
 
   load(): Promise<void>
   setSettings(patch: Partial<Settings>): void
@@ -182,8 +189,14 @@ export const useStore = create<AppState>()((set, get) => ({
   popover: null,
   openPopover(p) { set({ popover: p }) },
   closePopover() { set({ popover: null }) },
+  journal: { mode: 'unset' },
+  setJournal(journal) { set({ journal }) },
+  front: false,
+  setFront(front) { set({ front, popover: front ? null : get().popover }) },
 
   async load() {
+    // anything still waiting to be written goes out first, so a re-read never loses it
+    await flush(get, set)
     const { entries, settings, kv } = await db.loadAll()
     const map: Record<Id, Entry> = {}
     for (const e of entries) map[e.id] = e.stats ? e : { ...e, stats: computeStats(e) }

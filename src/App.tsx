@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
 import { useStore } from '@/model/store'
+import { journalFile } from '@/lib/journalFile'
 import { sound } from '@/feel/sound'
 import { setReducedMotion, MOTION } from '@/feel/motion'
 import { Shelf } from '@/library/Shelf'
@@ -8,13 +9,20 @@ import { PageEditor } from '@/editor/PageEditor'
 import { TopBar } from '@/ui/TopBar'
 import { Toasts } from '@/ui/Toasts'
 import { seedIfEmpty } from '@/model/seed'
+import { Landing } from '@/landing/Landing'
+import { S } from '@/copy/strings'
 
 if (import.meta.env.DEV) (window as any).folio = useStore
 
 // One load per page — StrictMode runs mount effects twice and two concurrent load()s can let a
-// stale IndexedDB read overwrite an entry the seed just created.
+// stale IndexedDB read overwrite an entry the seed just created. The journal file is looked up
+// first: when the browser still trusts it, its contents are in the database before load() reads.
 let booted: Promise<void> | null = null
-const boot = () => (booted ??= useStore.getState().load().then(() => seedIfEmpty()))
+const boot = () =>
+  (booted ??= journalFile
+    .restore()
+    .catch(err => { console.warn('journal file', err); return journalFile.status })
+    .then(j => { useStore.setState({ journal: j }); return useStore.getState().load() }))
 
 function applyTheme(theme: 'system' | 'light' | 'dark') {
   const dark = theme === 'dark' || (theme === 'system' && matchMedia('(prefers-color-scheme: dark)').matches)
@@ -25,8 +33,21 @@ export default function App() {
   const ready = useStore(s => s.ready)
   const route = useStore(s => s.route)
   const settings = useStore(s => s.settings)
+  const journal = useStore(s => s.journal)
+  const front = useStore(s => s.front)
+  // the front page is the way in until the journal is a file (or this browser), and on request
+  const landing = front || journal.mode === 'unset' || journal.mode === 'needs-permission'
 
   useEffect(() => { void boot() }, [])
+  // the starter book, once the journal is in place (never on the front page, never twice)
+  useEffect(() => { if (ready && !landing) void seedIfEmpty() }, [ready, landing])
+  // a file the app could not write to: say so once, the writing itself is safe in the database
+  useEffect(() => {
+    if (journal.mode === 'folder' && journal.error === 'write') useStore.getState().toast(S.ui.settings.writeFailed, { ms: 6000 })
+  }, [journal])
+  // status follows the file (a write that failed, then succeeded); a change of mode is applied by
+  // whoever made it, after the store has reloaded, so the starter book cannot land in the middle
+  useEffect(() => journalFile.subscribe(j => { const s = useStore.getState(); if (s.journal.mode === j.mode) s.setJournal(j) }), [])
 
   // theme + motion + sound follow settings
   useEffect(() => {
@@ -91,6 +112,7 @@ export default function App() {
   }, [])
 
   if (!ready) return <div className="app-loading" aria-busy="true" />
+  if (landing) return <Landing />
   return (
     <div className="app" data-view={route.view}>
       <Shelf />
