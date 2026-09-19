@@ -23,7 +23,7 @@ import { S } from '@/copy/strings'
 import { MOTION } from '@/feel/motion'
 import { sound } from '@/feel/sound'
 import { formatLong } from '@/lib/dates'
-import { isMediaFile, useImageUrl } from '@/lib/db'
+import { isMediaFile, MEDIA_ACCEPT, useImageUrl } from '@/lib/db'
 import { HUES, INK, coverHex, inkFor } from '@/model/palette'
 import { chapterAt, removeChapterAt, setChapterTitle as renameChapter, startChapterAt, startsChapter } from '@/model/contents'
 import { useEntry, useStore } from '@/model/store'
@@ -1134,7 +1134,7 @@ function Editor({ entry, pageIndex, routeIndex }: { entry: Entry; pageIndex: num
           onRemove={() => session.controller?.remove([imageSel.id])}
         />
       )}
-      <input ref={fileRef} type="file" accept="image/*,video/*" multiple hidden tabIndex={-1} aria-hidden="true" onChange={onFiles} />
+      <input ref={fileRef} type="file" accept={MEDIA_ACCEPT} multiple hidden tabIndex={-1} aria-hidden="true" onChange={onFiles} />
     </div>
   )
 }

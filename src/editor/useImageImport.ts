@@ -8,7 +8,7 @@
  * picture will land. Errors become toasts (too big / not a picture / couldn't read).
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { db, ImageTooLargeError, NotAnImageError } from '@/lib/db'
+import { db, ImageTooLargeError, NotAnImageError, UnplayableVideoError } from '@/lib/db'
 import { useStore } from '@/model/store'
 import { CONTENT, DEFAULT_IMAGE_W, PAGE_MARGIN, type Id, type ImageBlock } from '@/model/types'
 import { S } from '@/copy/strings'
@@ -17,6 +17,13 @@ import { CONTENT_MAX_X, CONTENT_MAX_Y, type CellRect } from './snap'
 import type { EditorSession } from './session'
 
 export interface PendingImage extends CellRect { key: number; page: number }
+
+/** Why a file did not land, in the words the page uses for it. */
+const importError = (err: unknown) =>
+  err instanceof ImageTooLargeError ? S.editor.image.tooBig
+  : err instanceof UnplayableVideoError ? S.editor.image.unplayable
+  : err instanceof NotAnImageError ? S.editor.image.unsupported
+  : S.editor.image.failed
 
 let seq = 0
 
@@ -67,8 +74,7 @@ export function useImageImport(current: () => EditorSession) {
         added.push(block.id)
       } catch (err) {
         if (!alive.current) return
-        const msg = err instanceof ImageTooLargeError ? S.editor.image.tooBig : err instanceof NotAnImageError ? S.editor.image.unsupported : S.editor.image.failed
-        st.toast(msg)
+        st.toast(importError(err))
       } finally {
         if (alive.current) setPending(p => p.filter(x => x.key !== key))
       }
@@ -95,8 +101,7 @@ export function useImageImport(current: () => EditorSession) {
       }))
     } catch (err) {
       if (!alive.current) return
-      const msg = err instanceof ImageTooLargeError ? S.editor.image.tooBig : err instanceof NotAnImageError ? S.editor.image.unsupported : S.editor.image.failed
-      st.toast(msg)
+      st.toast(importError(err))
     }
   }, [current])
 

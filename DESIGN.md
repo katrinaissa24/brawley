@@ -74,6 +74,7 @@ src/
   model/palette.ts             cover hues, default cover per month                (lead, frozen)
   model/store.ts               zustand store: entries, settings, route, undo      (lead, frozen API)
   lib/db.ts                    IndexedDB (entries, images, kv), image pipeline    (lead, frozen API)
+  lib/decode.ts, heic.worker.ts  a picture's pixels, HEIC included (§5c)          (lead)
   lib/ids.ts, lib/dates.ts     nanoid-ish ids, date formatting                    (lead)
   feel/sound.ts                WebAudio engine (API frozen)                        (lead)
   feel/spring.ts, feel/motion.ts  spring integrator, MOTION flags                 (lead)
@@ -153,7 +154,9 @@ Additive since v0.1: `dbEvents.subscribe(fn)` fires after every write to entries
 list (never settings); `db.clearJournal()` empties exactly those (not settings, not the remembered folder);
 `db.allEntries()`, `db.allImages()`, `db.replaceEntries(list)`, `db.putImageFromBlob(meta, blob, quiet?)`
 and `db.deleteImageQuiet(id)` are the folder's view of the store; `db.importJSON(data, {quiet})` skips the
-change event.
+change event. `isMediaFile(f)` is the door (the file's name counts as well as its type — §5c),
+`IMAGE_ACCEPT` / `MEDIA_ACCEPT` are what the file pickers ask for, and `UnplayableVideoError`
+(a `NotAnImageError`) is a video whose codec this browser has no decoder for.
 
 ## 5b. The journal folder (`src/lib/journalFile.ts`)
 
@@ -180,6 +183,22 @@ in the top bar, ⌘S, or Settings — and opened again from the front page or Se
 `status.unsaved` lights the capsule; the tab warns before closing on unsaved changes.
 A change of mode is applied by whoever made it, after `store.load()`, never by the status subscription
 (otherwise the starter book can seed into a journal that is still being read in).
+
+## 5c. Pictures the browser cannot read (`src/lib/decode.ts`)
+
+Everything that imports a picture goes through `decodeImage(file)`: the browser decodes it when it
+can, and when it cannot the file goes to libheif (WebAssembly) in `heic.worker.ts` — that is HEIC /
+HEIF, the format an iPhone writes, which only Safari paints. The decoder is ~2MB, so it is its own
+chunk, fetched the first time a HEIC actually turns up and let go 30s after the last one, and it
+must run in a worker (the bundle compiles its wasm synchronously, which browsers only allow off the
+main thread). It returns the **primary** image — a HEIC also carries thumbnails, depth maps and
+rotated variants — with the file's rotation already applied, and the picture is then stored as a
+JPEG like any other, so a journal stays readable in a browser that has never heard of HEIC.
+(`libheif-js` is LGPL-3.0 and is loaded unmodified, as its own chunk.)
+
+A browser does not always know what it has been handed: a `.heic` or a `.mov` often arrives with no
+type at all. The file's name has the last word (`isMediaFile`), a retyped slice gives it back the
+type the pipeline reads, and a HEIC with neither name nor type is known by the brand in its header.
 
 ## 6. Sound contract (frozen — `src/feel/sound.ts`)
 
