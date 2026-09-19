@@ -473,8 +473,11 @@ export class GestureController {
   }
   private teardown(g: Gesture) {
     if (this.raf) { cancelAnimationFrame(this.raf); this.raf = 0 }
-    try { this.root.releasePointerCapture(g.pointerId) } catch { /* fine */ }
+    // null this.g before releasing capture: some engines fire 'lostpointercapture'
+    // synchronously from releasePointerCapture(), which would otherwise re-enter
+    // onLost()/restore() while this.g still points at the gesture onUp is finishing
     this.g = null
+    try { this.root.releasePointerCapture(g.pointerId) } catch { /* fine */ }
     this.latest = null
     this.prevSample = null
     if (g.mode === 'empty') return
