@@ -26,6 +26,9 @@
   --serif: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
   --ui: -apple-system, "SF Pro Text", system-ui, sans-serif;
   --mono: "SF Mono", "JetBrains Mono", Menlo, monospace;
+  /* text-box typefaces a writer can pick (bundled via @fontsource, so they work offline) */
+  --font-script: "Great Vibes", "Snell Roundhand", "Apple Chancery", cursive;
+  --font-spacemono: "Space Mono", var(--mono);
 
   /* document type scale (reference: 18.5px / 1.68) */
   --doc-size: 18.5px;

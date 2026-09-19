@@ -34,6 +34,7 @@ export const ui = {
   },
   cover: {
     title: 'Cover',
+    decorate: 'Decorate the cover',
     close: 'Close',
     color: 'Color',
     moreTints: 'More tints',

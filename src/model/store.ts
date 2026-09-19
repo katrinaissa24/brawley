@@ -8,6 +8,7 @@ import { nanoid } from '@/lib/ids'
 import { todayISO, monthKey } from '@/lib/dates'
 import { defaultCover } from './palette'
 import {
+  COVER_PAGE,
   DEFAULT_SETTINGS, type Entry, type EntryStats, type Handoff, type Id, type ISODate, type Page,
   type Rect, type Route, type Settings, type Toast, spreadOfPage,
 } from './types'
@@ -37,9 +38,12 @@ function sortOrder(entries: Record<Id, Entry>): Id[] {
 function routeToHash(r: Route): string {
   if (r.view === 'shelf') return '#/'
   if (r.view === 'book') return `#/b/${r.entryId}${r.spread ? `/s/${r.spread}` : ''}`
+  if (r.pageIndex === COVER_PAGE) return `#/b/${r.entryId}/cover`
   return `#/b/${r.entryId}/p/${r.pageIndex}`
 }
 export function parseHash(h: string): Route {
+  const c = h.match(/^#\/b\/([^/]+)\/cover/)
+  if (c) return { view: 'editor', entryId: c[1], pageIndex: COVER_PAGE }
   const m = h.match(/^#\/b\/([^/]+)(?:\/(p|s)\/(\d+))?/)
   if (!m) return { view: 'shelf' }
   if (m[2] === 'p') return { view: 'editor', entryId: m[1], pageIndex: Number(m[3]) }
@@ -213,7 +217,7 @@ export const useStore = create<AppState>()((set, get) => ({
     if (r.view !== 'shelf') {
       // remember where the ribbon is
       const e = get().entries[r.entryId]
-      if (e) {
+      if (e && !(r.view === 'editor' && r.pageIndex === COVER_PAGE)) {
         const page = r.view === 'editor' ? r.pageIndex : Math.max(0, r.spread * 2 - 1)
         if (e.lastOpenedPage !== page) get().commitEntry({ ...e, lastOpenedPage: page }, { silent: true })
       }

@@ -9,6 +9,7 @@ import type { Entry, StickerSource } from '@/model/types'
 import { PITCH } from '@/model/types'
 import { HUES } from '@/model/palette'
 import { formatLong, formatShort, todayISO } from '@/lib/dates'
+import { useImageUrl } from '@/lib/db'
 import { isStickerId, type StickerId } from './stickers'
 import './editor-chrome.css'
 
@@ -41,6 +42,13 @@ export function Sticker({ source, entry, w, h, className }: StickerProps) {
       </div>
     )
   }
+  if (source.type === 'image') {
+    return (
+      <div className={cls} data-sticker="custom" aria-hidden="true">
+        <CustomArt imageId={source.imageId} />
+      </div>
+    )
+  }
   if (!isStickerId(source.id)) return <div className={cls} data-sticker="missing" aria-hidden="true" />
   return (
     <div className={cls} data-sticker={source.id} aria-hidden="true">
@@ -50,6 +58,12 @@ export function Sticker({ source, entry, w, h, className }: StickerProps) {
 }
 
 /* ---------- artwork ---------- */
+
+/** One of your own stickers: the stored PNG, contained in the block (its own cut and border are baked in). */
+function CustomArt({ imageId }: { imageId: string }) {
+  const url = useImageUrl(imageId, 'full')
+  return url ? <img className="ed-sticker__img" src={url} alt="" draggable={false} decoding="async" /> : null
+}
 
 function Art({ id, entry }: { id: StickerId; entry?: Entry }) {
   switch (id) {

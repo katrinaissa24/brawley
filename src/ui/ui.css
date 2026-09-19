@@ -391,3 +391,6 @@ html[data-reduce-motion="on"] .ui-tip { transition-duration: 0ms; }
   .ui-pop--sheet { transform: translate(-50%, -50%); }
   .ui-savedot[data-state="saving"]::before { animation: none; opacity: 1; }
 }
+
+/* cover inspector: the way into the cover designer */
+.ui-cover-decorate { width: 100%; justify-content: center; margin: 0 0 14px; }

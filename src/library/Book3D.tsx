@@ -11,6 +11,7 @@ import { memo, type CSSProperties } from 'react'
 import type { Entry, Id } from '@/model/types'
 import { HUES, INK, coverHex, inkFor } from '@/model/palette'
 import { useImageUrl } from '@/lib/db'
+import { CoverDesign } from '@/book/CoverDesign'
 import { S } from '@/copy/strings'
 import { GHOST_ID, jitter } from './layout'
 
@@ -70,6 +71,7 @@ export const Book3D = memo(function Book3D({ entry, x, w, state, ribbon, registe
         {entry.title.trim() && (
           <div className={'book__title' + (img ? ' -plain' : ' -band')}>{entry.title.trim()}</div>
         )}
+        <CoverDesign entry={entry} />
       </div>
       <div className="book__face book__cover -back" />
       <div className="book__face book__top" />

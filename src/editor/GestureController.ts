@@ -16,7 +16,7 @@ import { sound } from '@/feel/sound'
 import { useStore } from '@/model/store'
 import { CONTENT, MIN_BLOCK, MIN_TEXT_W, PITCH, type Block, type Id, type ImageBlock, type TextBlock } from '@/model/types'
 import { S } from '@/copy/strings'
-import { addBlock, cellFloorAt, duplicateBlock, newBodyAt, removeBlock, reorderBlock, textBlocks, updateBlock } from './ops'
+import { addBlock, cellFloorAt, duplicateBlock, newBodyAt, removeBlock, reorderBlock, textBlocks, updateBlock, withBlocks } from './ops'
 import type { EditorSession, LiveRects } from './session'
 import { clampCells, clampPosPx, guidesFrom, intersects, magnetStep, nearestGuide, newAxis, type AxisMagnet, type Guides, type PxRect } from './snap'
 import type { Handle } from './SelectionOverlay'
@@ -97,6 +97,7 @@ export class GestureController {
   private onDown = (e: PointerEvent) => {
     if (e.button !== 0 || this.g) return
     const t = e.target as HTMLElement
+    if (t.closest('[data-media-control]')) return // a video's play button is a button, not a grip
     const handleEl = t.closest<HTMLElement>('[data-handle]')
     let id: string | undefined
     let handle: GHandle | null = null
@@ -548,23 +549,19 @@ export class GestureController {
       })
       sound.whump()
       const first = gone[0].block!
-      const msg = gone.length > 1 ? S.editor.removed.text : first.type === 'image' ? S.editor.removed.image : first.type === 'sticker' ? S.editor.removed.sticker : S.editor.removed.text
+      const msg = gone.length > 1 ? S.editor.removed.text : first.type === 'image' ? (first.media === 'video' ? S.editor.removed.video : S.editor.removed.image) : first.type === 'sticker' ? S.editor.removed.sticker : S.editor.removed.text
       useStore.getState().toast(msg, {
         undo: () => {
           const s = this.session
           for (const x of gone) s.justAdded.add(x.id)
-          s.commit(e => {
-            const p = e.pages[pi]
-            if (!p) return e
-            const blocks = p.blocks.slice()
+          s.commit(e => withBlocks(e, pi, cur => {
+            const blocks = cur.slice()
             for (const x of gone.slice().sort((a, b) => a.index - b.index)) {
               if (blocks.some(b => b.id === x.id)) continue
               blocks.splice(Math.min(x.index, blocks.length), 0, x.block!)
             }
-            const pages = e.pages.slice()
-            pages[pi] = { ...p, blocks }
-            return { ...e, pages }
-          })
+            return blocks
+          }))
           useStore.getState().select(gone.map(x => x.id))
         },
       })

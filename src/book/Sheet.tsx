@@ -9,6 +9,7 @@ import { DocumentView } from '@/editor/DocumentView'
 import { useImageUrl } from '@/lib/db'
 import type { Entry } from '@/model/types'
 import { S } from '@/copy/strings'
+import { CoverDesign } from './CoverDesign'
 import { Endpaper } from './Endpaper'
 import { bookRegistry } from './registry'
 
@@ -112,6 +113,7 @@ function CoverFace({ entry, shadeRef }: { entry: Entry; shadeRef: React.RefObjec
       {img && <img className="ob__coverImg" src={img} alt="" draggable={false} />}
       <div className="ob__coverSheen" />
       <div className={'ob__coverBand' + (title ? '' : ' -empty')}>{title || S.book.untitled}</div>
+      <CoverDesign entry={entry} />
       <div className="ob__coverSpineShade" />
       <div ref={shadeRef} className="ob__shade" />
     </div>

@@ -8,6 +8,7 @@
 import { useStore } from '@/model/store'
 import { PITCH, type Block, type Entry, type Id, type Page } from '@/model/types'
 import type { FormatCmd } from './BubbleToolbar'
+import { pageOf } from './ops'
 import type { PxRect } from './snap'
 import type { GestureController } from './GestureController'
 import type { LiveRects } from './wrap'
@@ -67,7 +68,8 @@ export class EditorSession {
     return useStore.getState().entries[this.entryId]
   }
   page(): Page | undefined {
-    return this.entry()?.pages[this.pageIndex]
+    const e = this.entry()
+    return e && pageOf(e, this.pageIndex)
   }
   block(id: Id): Block | undefined {
     return this.page()?.blocks.find(b => b.id === id)

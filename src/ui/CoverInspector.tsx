@@ -4,7 +4,7 @@
  */
 import { useEffect, useRef, useState } from 'react'
 import type { Cover, Hue, Id, Rect, Tint } from '@/model/types'
-import { BOOK, spineWidth } from '@/model/types'
+import { BOOK, COVER_PAGE, spineWidth } from '@/model/types'
 import { useEntry, useStore } from '@/model/store'
 import { HUES, HUE_NAMES, HUE_ORDER, INK, inkFor } from '@/model/palette'
 import { db, ImageTooLargeError, NotAnImageError, useImageUrl } from '@/lib/db'
@@ -23,6 +23,7 @@ export function CoverInspector({ entryId, anchor }: { entryId: Id; anchor: Rect 
   const file = useRef<HTMLInputElement>(null)
   const swatches = useRef<HTMLDivElement>(null)
   const thumb = useImageUrl(entry?.cover.imageId, 'thumb')
+  const editingCover = useStore(s => s.route.view === 'editor' && s.route.pageIndex === COVER_PAGE)
 
   useEffect(() => { useStore.getState().setActiveEntry(entryId) }, [entryId])
   useEffect(() => { if (!entry) useStore.getState().closePopover() }, [entry])
@@ -122,6 +123,20 @@ export function CoverInspector({ entryId, anchor }: { entryId: Id; anchor: Rect 
             <Icon.chevronDown />
           </button>
         </Section>
+
+        {!editingCover && (
+          <button
+            type="button"
+            className="ui-btn ui-cover-decorate"
+            onClick={() => {
+              const st = useStore.getState()
+              st.closePopover()
+              st.openPage(entryId, COVER_PAGE)
+            }}
+          >
+            {C.decorate}
+          </button>
+        )}
 
         <Section title={C.finish}>
           <Segmented

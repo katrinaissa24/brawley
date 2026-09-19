@@ -5,6 +5,7 @@
  */
 import { useCallback, useRef, useState } from 'react'
 import { S } from '@/copy/strings'
+import { isMediaFile } from '@/lib/db'
 import type { Rect, StickerSource } from '@/model/types'
 import { Glyph, tip } from './BubbleToolbar'
 import { StickerPicker } from './StickerPicker'
@@ -30,7 +31,7 @@ export function InsertRail({ onAddText, onAddImage, onAddSticker, onCover, class
   const closePicker = useCallback(() => setPicker({ open: false, anchor: null }), [])
 
   const onFiles = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files ?? []).filter(f => f.type.startsWith('image/'))
+    const files = Array.from(e.target.files ?? []).filter(isMediaFile)
     e.target.value = ''
     if (files.length) onAddImage(files)
   }
@@ -55,7 +56,7 @@ export function InsertRail({ onAddText, onAddImage, onAddSticker, onCover, class
             <circle cx="11.5" cy="6.5" r="1.2" fill="currentColor" stroke="none" />
           </Glyph>
         </button>
-        <input ref={fileRef} type="file" accept="image/*" multiple hidden tabIndex={-1} aria-hidden="true" onChange={onFiles} />
+        <input ref={fileRef} type="file" accept="image/*,video/*" multiple hidden tabIndex={-1} aria-hidden="true" onChange={onFiles} />
         <button
           ref={stickerBtn}
           type="button"

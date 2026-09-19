@@ -1,6 +1,7 @@
 /**
  * Bubble toolbar: floats 8px above the current text selection (below when there is no room),
- * with the block-kind segmented control, B I U S, Link and List. It never steals focus from the
+ * with the block-kind segmented control, the typeface picker (serif · script · Space Mono, for the
+ * whole box), B I U S, Link and List. It never steals focus from the
  * contenteditable (mousedown is prevented on the whole capsule). Active states come from
  * document.queryCommandState on selectionchange, rAF-throttled, written straight to the buttons
  * (no React re-render per selection change).
@@ -11,7 +12,7 @@
 import { useEffect, useLayoutEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { S } from '@/copy/strings'
-import type { Rect, TextKind } from '@/model/types'
+import type { Rect, TextFont, TextKind } from '@/model/types'
 import './editor-chrome.css'
 
 export type FormatCmd = 'bold' | 'italic' | 'underline' | 'strikeThrough' | 'link' | 'list'
@@ -21,13 +22,16 @@ export interface BubbleToolbarProps {
   anchor: Rect | null
   kind: TextKind
   onKind(k: TextKind): void
+  font: TextFont
+  onFont(f: TextFont): void
   onFormat(cmd: FormatCmd): void
 }
 
 const KINDS: TextKind[] = ['title', 'heading', 'body', 'quote', 'caption']
+const FONTS: TextFont[] = ['serif', 'script', 'mono']
 const FORMATS: FormatCmd[] = ['bold', 'italic', 'underline', 'strikeThrough', 'link', 'list']
 
-export function BubbleToolbar({ anchor, kind, onKind, onFormat }: BubbleToolbarProps) {
+export function BubbleToolbar({ anchor, kind, onKind, font, onFont, onFormat }: BubbleToolbarProps) {
   const btns = useRef<Partial<Record<FormatCmd, HTMLButtonElement | null>>>({})
   const visible = anchor !== null
 
@@ -84,6 +88,25 @@ export function BubbleToolbar({ anchor, kind, onKind, onFormat }: BubbleToolbarP
             onClick={() => onKind(k)}
           >
             {C.kinds[k]}
+          </button>
+        ))}
+      </div>
+      <span className="ed-chrome-sep" aria-hidden="true" />
+      <div className="ed-bubble__kinds ed-bubble__fonts" role="radiogroup" aria-label={C.fontMenu}>
+        {FONTS.map(f => (
+          <button
+            key={f}
+            type="button"
+            role="radio"
+            aria-checked={font === f}
+            aria-label={C.fonts[f]}
+            tabIndex={font === f ? 0 : -1}
+            className="ed-bubble__kind ed-bubble__font"
+            data-font={f}
+            data-tip={C.fonts[f]}
+            onClick={() => onFont(f)}
+          >
+            Aa
           </button>
         ))}
       </div>
