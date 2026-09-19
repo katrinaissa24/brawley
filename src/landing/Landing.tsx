@@ -35,7 +35,7 @@ export function Landing() {
   }, [])
   const toTop = (e: React.MouseEvent) => { e.preventDefault(); root.current?.scrollTo({ top: 0, behavior: MOTION.reduced ? 'auto' : 'smooth' }) }
   const journal = useStore(s => s.journal)
-  const inside = journal.mode === 'file' || journal.mode === 'browser'
+  const inside = journal.mode === 'folder' || journal.mode === 'download'
   const wayIn = useWayIn()
 
   return (
@@ -116,9 +116,11 @@ export function Landing() {
 
 /* ---------- the way in ----------
  * One state machine shared by the hero and the closing call. What the buttons do depends on where
- * the journal is: nothing yet → create a file (or open one); a remembered file the browser wants a
- * click for → open it again; a journal already open → step onto the shelf. */
+ * the journal is: nothing yet → choose a folder (or, without the File System Access API, keep it
+ * here and save as a download); a remembered folder the browser wants a click for → open it again;
+ * a journal already open → step onto the shelf. */
 type Busy = 'new' | 'open' | 'grant' | null
+type Outcome = { status: JournalStatus | null; opened: boolean } | null
 interface WayInState {
   journal: JournalStatus
   busy: Busy
@@ -137,42 +139,43 @@ function useWayIn(): WayInState {
   const E = L.entry
 
   /** the journal is in place: reload the store from it and step inside */
-  const enter = useCallback(async (next: JournalStatus | null, opened: boolean) => {
-    if (!next) return
+  const enter = useCallback(async (out: Outcome) => {
+    if (!out?.status) return
     const s = useStore.getState()
     await s.load()
-    if (opened) useStore.getState().markSeeded() // a journal someone already wrote never gets the starter
-    useStore.getState().setJournal(next)
+    if (out.opened) useStore.getState().markSeeded() // a journal someone already wrote never gets the starter
+    useStore.getState().setJournal(out.status)
     useStore.getState().setFront(false)
   }, [])
 
-  const run = useCallback(async (kind: Exclude<Busy, null>, fn: () => Promise<JournalStatus | null>, opened: boolean) => {
+  const run = useCallback(async (kind: Exclude<Busy, null>, fn: () => Promise<Outcome>) => {
     if (busy) return
     setBusy(kind)
     setError('')
     try {
-      await enter(await fn(), opened)
+      await enter(await fn())
     } catch (err) {
       console.warn('journal', err)
-      setError(err instanceof Error && err.message === 'not a journal' ? E.notAJournal : E.readFailed(journal.fileName ?? 'the file'))
+      setError(err instanceof Error && err.message === 'not a journal' ? E.notAJournal : E.readFailed(journal.name ?? 'the folder'))
     } finally {
       setBusy(null)
     }
-  }, [busy, enter, journal.fileName, E])
+  }, [busy, enter, journal.name, E])
 
   const primary = useCallback(() => {
     const j = useStore.getState().journal
-    if (j.mode === 'file' || j.mode === 'browser') { useStore.getState().setFront(false); return }
-    if (j.mode === 'needs-permission') { void run('grant', () => journalFile.grant(), true); return }
-    void run('new', () => journalFile.createNew(), false)
+    if (j.mode === 'folder' || j.mode === 'download') { useStore.getState().setFront(false); return }
+    if (j.mode === 'needs-permission') { void run('grant', async () => ({ status: await journalFile.grant(), opened: true })); return }
+    if (!fileAccessSupported) { void run('new', async () => ({ status: await journalFile.useDownloads(), opened: false })); return }
+    void run('new', () => journalFile.chooseFolder())
   }, [run])
   const secondary = useCallback(() => {
     if (!fileAccessSupported) { fileInput.current?.click(); return }
-    void run('open', () => journalFile.openExisting(), true)
+    void run('open', () => journalFile.chooseFolder())
   }, [run])
   const onFile = useCallback((f: File | undefined) => {
     if (!f) return
-    void run('open', async () => { await journalFile.importFromFile(f); return journalFile.useBrowser() }, true)
+    void run('open', async () => ({ status: await journalFile.importFromFile(f), opened: true }))
     if (fileInput.current) fileInput.current.value = ''
   }, [run])
 
@@ -182,14 +185,14 @@ function useWayIn(): WayInState {
 function WayIn(p: WayInState & { dark?: boolean; secondaryHow?: (e: React.MouseEvent) => void }) {
   const E = L.entry
   const j = p.journal
-  const inside = j.mode === 'file' || j.mode === 'browser'
+  const inside = j.mode === 'folder' || j.mode === 'download'
   const back = j.mode === 'needs-permission'
-  const primaryLabel = p.busy === 'new' ? E.choosing : p.busy === 'grant' ? E.opening : inside ? E.openShelf : back ? E.reopen(j.fileName ?? '') : E.start
+  const primaryLabel = p.busy === 'new' ? E.choosing : p.busy === 'grant' ? E.opening : inside ? E.openShelf : back ? E.reopen(j.name ?? '') : E.start
   const secondaryLabel = p.busy === 'open' ? E.opening : inside ? E.another : back ? E.different : E.open
   const hint = p.error
     ? p.error
-    : j.error === 'read' && j.fileName
-      ? E.readFailed(j.fileName)
+    : j.error === 'read' && j.name
+      ? E.readFailed(j.name)
       : back
         ? E.reopenHint
         : !fileAccessSupported

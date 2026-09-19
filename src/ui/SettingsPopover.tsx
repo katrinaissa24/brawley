@@ -22,6 +22,7 @@ export function SettingsPopover({ anchor }: { anchor: Rect }) {
   const [confirming, setConfirming] = useState(false)
   const [word, setWord] = useState('')
   const file = useRef<HTMLInputElement>(null)
+  const journalInput = useRef<HTMLInputElement>(null)
   const confirmField = useRef<HTMLInputElement>(null)
   const T = S.ui.settings
 
@@ -66,25 +67,50 @@ export function SettingsPopover({ anchor }: { anchor: Rect }) {
       if (file.current) file.current.value = ''
     }
   }
-  /** move the journal into a new file, or open another one in its place */
-  const changeFile = async (how: 'new' | 'open') => {
+  /** another folder: one that already holds a journal is opened, an empty one receives this journal */
+  const changeFolder = async () => {
     if (busy) return
     setBusy('file')
     const s = useStore.getState()
     try {
-      const next = how === 'new' ? await journalFile.createNew() : await journalFile.openExisting()
-      if (!next) return
+      const out = await journalFile.chooseFolder()
+      if (!out) return
       await s.load()
       const st = useStore.getState()
-      st.setJournal(next)
-      if (how === 'open') { st.markSeeded(); st.toast(T.openedFile(next.fileName ?? '', st.order.length)) }
-      else st.toast(T.movedTo(next.fileName ?? ''))
+      st.setJournal(out.status)
+      if (out.opened) { st.markSeeded(); st.toast(T.openedFile(out.status.name ?? '', st.order.length)) }
+      else st.toast(T.movedTo(out.status.name ?? ''))
     } catch (err) {
-      console.warn('journal file', err)
+      console.warn('journal folder', err)
       s.toast(err instanceof Error && err.message === 'not a journal' ? T.notAJournal : T.importBad)
     } finally {
       setBusy(null)
     }
+  }
+  /** download mode: a journal file chosen with the plain file input replaces this one */
+  const openDownloaded = async (f: File | undefined) => {
+    if (!f || busy) return
+    setBusy('file')
+    const s = useStore.getState()
+    try {
+      const next = await journalFile.importFromFile(f)
+      await s.load()
+      const st = useStore.getState()
+      st.setJournal(next)
+      st.markSeeded()
+      st.toast(T.openedFile(next.name ?? '', st.order.length))
+    } catch (err) {
+      console.warn('journal file', err)
+      s.toast(T.notAJournal)
+    } finally {
+      setBusy(null)
+      if (journalInput.current) journalInput.current.value = ''
+    }
+  }
+  const saveNow = async () => {
+    if (busy) return
+    setBusy('file')
+    try { await journalFile.save(); useStore.getState().toast(T.saved(journal.name ?? '')) } finally { setBusy(null) }
   }
   const armed = word.trim().toLowerCase() === T.deleteWord
   const wipe = async () => {
@@ -163,12 +189,19 @@ export function SettingsPopover({ anchor }: { anchor: Rect }) {
         </Section>
 
         <Section title={T.journal}>
-          <p className="ui-where">{journal.mode === 'file' && journal.fileName ? T.keptIn(journal.fileName) : T.keptInBrowser}</p>
-          <p className="ui-hint">{journal.mode === 'file' ? T.fileHint : T.browserHint}</p>
-          {fileAccessSupported && (
+          <p className="ui-where">{journal.mode === 'folder' ? T.keptInFolder(journal.name ?? '') : T.savedAs(journal.name ?? '')}</p>
+          <p className="ui-hint">{journal.mode === 'folder' ? T.folderHint : T.downloadHint}</p>
+          {fileAccessSupported && journal.mode === 'folder' ? (
             <div className="ui-btnrow">
-              <button type="button" className="ui-btn" disabled={busy !== null} onClick={() => void changeFile('open')}>{T.changeFile}</button>
-              <button type="button" className="ui-btn" disabled={busy !== null} onClick={() => void changeFile('new')}>{T.saveAs}</button>
+              <button type="button" className="ui-btn" disabled={busy !== null} onClick={() => void changeFolder()}>{T.changeFolder}</button>
+            </div>
+          ) : (
+            <div className="ui-btnrow">
+              <button type="button" className="ui-btn" data-unsaved={journal.unsaved || undefined} disabled={busy !== null} onClick={() => void saveNow()}>
+                {journal.unsaved ? T.saveUnsaved : T.save}
+              </button>
+              <button type="button" className="ui-btn" disabled={busy !== null} onClick={() => journalInput.current?.click()}>{T.openFile}</button>
+              <input ref={journalInput} className="ui-file" type="file" accept="application/json,.json" tabIndex={-1} aria-hidden="true" onChange={e => void openDownloaded(e.currentTarget.files?.[0])} />
             </div>
           )}
           <p className="ui-hint ui-hint--gap">{T.exportHint}</p>

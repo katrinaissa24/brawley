@@ -457,6 +457,16 @@ export function OpenBook() {
           <div className="ob__zone -fwd" hidden={!canFwd} aria-label={S.book.nextPage} title={S.book.nextPage}
             onPointerDown={zoneDown(1)} onPointerEnter={hoverZone(1, true)} onPointerLeave={hoverZone(1, false)} />
         </div>
+        <button type="button" className="ob__arrow -back" hidden={!canBack || phase !== 'open'} aria-label={S.book.prevPage} title={S.book.prevPage}
+          onClick={() => { if (phase === 'open' && !bookRegistry.editorActive) { setMenu(null); ctl.flip(-1) } }}
+          onPointerEnter={hoverZone(-1, true)} onPointerLeave={hoverZone(-1, false)}>
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M10 3 5 8l5 5" /></svg>
+        </button>
+        <button type="button" className="ob__arrow -fwd" hidden={!canFwd || phase !== 'open'} aria-label={S.book.nextPage} title={S.book.nextPage}
+          onClick={() => { if (phase === 'open' && !bookRegistry.editorActive) { setMenu(null); ctl.flip(1) } }}
+          onPointerEnter={hoverZone(1, true)} onPointerLeave={hoverZone(1, false)}>
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m6 3 5 5-5 5" /></svg>
+        </button>
         <div className="ob__caption" aria-hidden="true">{title} · {formatLong(entry.date)}</div>
         <div ref={xfade} className="ob__xfade" />
       </div>

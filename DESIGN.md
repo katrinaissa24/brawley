@@ -64,7 +64,7 @@ src/
   feel/sound.ts                WebAudio engine (API frozen)                        (lead)
   feel/spring.ts, feel/motion.ts  spring integrator, MOTION flags                 (lead)
   copy/strings.ts              all UI copy                                        (chrome agent)
-  lib/journalFile.ts           the journal file on disk: File System Access, mirror of IDB (§5b)
+  lib/journalFile.ts           the journal folder on disk: File System Access, mirror of IDB (§5b)
   landing/                     Landing (page + the way in), HeroShelf, Story, Demo, landing.css,
                                assets/desk.jpg                                    (landing agent)
   library/                     Shelf, Book3D, ShelfScroller, LabelPill, MonthPill,
@@ -128,22 +128,34 @@ Each agent owns only its directory (plus the files listed). CSS classes are pref
 `useImageUrl(id, q)` hook, `db.exportJSON()`, `db.importJSON(file)`, `db.wipe()`.
 
 Additive since v0.1: `dbEvents.subscribe(fn)` fires after every write to entries, images or the sticker
-list (never settings); `db.clearJournal()` empties exactly those (not settings, not the remembered file);
-`db.exportJSON(ids?, encode?)` takes a base64 encoder so a caller can cache; `db.importJSON(data, {quiet})`
-skips the change event.
+list (never settings); `db.clearJournal()` empties exactly those (not settings, not the remembered folder);
+`db.allEntries()`, `db.allImages()`, `db.replaceEntries(list)`, `db.putImageFromBlob(meta, blob, quiet?)`
+and `db.deleteImageQuiet(id)` are the folder's view of the store; `db.importJSON(data, {quiet})` skips the
+change event.
 
-## 5b. The journal file (`src/lib/journalFile.ts`)
+## 5b. The journal folder (`src/lib/journalFile.ts`)
 
-No accounts and no server: the journal is one file the user chose, in the export shape (`ExportFile`).
-IndexedDB stays the working copy every module talks to; the file is its mirror. Every database change
-schedules a rewrite (1.2s trailing, serialized, also on `visibilitychange` hidden / `pagehide`); unchanged
-pictures are not re-encoded (a base64 cache keyed by id + size). The `FileSystemFileHandle` is kept in kv
-`journalFile` with a `{lastModified, size}` stamp of the file as last written or read, so a visit where
-nothing changed on disk skips the read entirely; a file edited elsewhere wins and is read back in.
+No accounts and no server: the journal is a folder the user chose. IndexedDB stays the working copy
+every module talks to; the folder is kept in step with it:
 
-Modes: `unset` (front page) · `needs-permission` (a remembered file the browser wants one click for —
-the front page says "Welcome back" and names it) · `file` · `browser` (no File System Access API:
-Safari and Firefox keep the journal in IndexedDB only; the copy says so; export/import still work).
+```
+‹folder›/journal.json    entries, the sticker list, a manifest of the media (small; rewritten on change)
+‹folder›/media/‹id›.jpg  every picture and video, written once when it arrives, removed when nothing
+                         references it, never rewritten — a journal full of video costs one write per video
+```
+
+Every database change (`dbEvents`) schedules a reconcile (1.2s trailing, serialized, also on
+`visibilitychange` hidden / `pagehide`): journal.json rewritten, missing media written, orphans removed.
+The `FileSystemDirectoryHandle` is kept in kv `journalFolder` with a `{lastModified, size}` stamp of
+journal.json as last written or read, so a visit where nothing changed on disk reads nothing; a
+journal.json changed elsewhere wins and is read back in, media by id + size (only what is missing is read).
+
+Modes: `unset` (front page) · `needs-permission` (a remembered folder the browser wants one click for —
+the front page says "Welcome back" and names it) · `folder` · `download`. `download` is the path for
+browsers without the File System Access API (Safari, Firefox): the journal stays in IndexedDB and is
+saved as one JSON file with the media inside (the export format) on request — the Save journal capsule
+in the top bar, ⌘S, or Settings — and opened again from the front page or Settings with a file picker.
+`status.unsaved` lights the capsule; the tab warns before closing on unsaved changes.
 A change of mode is applied by whoever made it, after `store.load()`, never by the status subscription
 (otherwise the starter book can seed into a journal that is still being read in).
 

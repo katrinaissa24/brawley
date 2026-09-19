@@ -43,7 +43,7 @@ export default function App() {
   useEffect(() => { if (ready && !landing) void seedIfEmpty() }, [ready, landing])
   // a file the app could not write to: say so once, the writing itself is safe in the database
   useEffect(() => {
-    if (journal.mode === 'file' && journal.error === 'write') useStore.getState().toast(S.ui.settings.writeFailed, { ms: 6000 })
+    if (journal.mode === 'folder' && journal.error === 'write') useStore.getState().toast(S.ui.settings.writeFailed, { ms: 6000 })
   }, [journal])
   // status follows the file (a write that failed, then succeeded); a change of mode is applied by
   // whoever made it, after the store has reloaded, so the starter book cannot land in the middle
