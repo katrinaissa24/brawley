@@ -55,7 +55,8 @@ export const KEYS: Record<Surface, readonly KeyRow[]> = {
     row(['⇧⌘S'], K.sticker),
     row(['⇧⌘D'], K.dateStamp),
     row(['1–4'], K.wrap),
-    row(['⌘[', '⌘]'], K.prevNext),
+    row(['←', '→'], K.prevNext),
+    row(['⌘−', '⌘=', '⌘0'], K.zoomPage),
     row(['Esc'], K.deselect),
   ],
 }

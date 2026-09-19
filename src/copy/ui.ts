@@ -175,6 +175,7 @@ export const ui = {
       dateStamp: 'Date stamp',
       wrap: 'Wrap mode, with a picture selected',
       prevNext: 'Previous / next page',
+      zoomPage: 'Zoom out, in, fit',
       deselect: 'Deselect, then back to book',
     },
   },
