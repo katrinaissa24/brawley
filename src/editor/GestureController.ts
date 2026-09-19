@@ -9,6 +9,8 @@
  * ring above the frame or from any corner's rotate zone). Text blocks move only via their grab
  * handle or their selected frame; a plain click in text places the caret and never reaches here.
  * Keyboard nudge / delete / duplicate / reorder live here too so PageEditor just forwards keys.
+ * A move that wanders off the page asks the session's carrier where it is (the other page of the
+ * spread, a page-turn arrow) and, on release, hands the block over instead of committing a move.
  */
 import { animateSpring, SPRINGS } from '@/feel/spring'
 import { dur, MOTION } from '@/feel/motion'
@@ -17,7 +19,7 @@ import { useStore } from '@/model/store'
 import { CONTENT, MIN_BLOCK, MIN_TEXT_W, PITCH, type Block, type Id, type ImageBlock, type TextBlock } from '@/model/types'
 import { S } from '@/copy/strings'
 import { addBlock, cellFloorAt, duplicateBlock, newBodyAt, removeBlock, reorderBlock, textBlocks, updateBlock, withBlocks } from './ops'
-import type { EditorSession, LiveRects } from './session'
+import type { Carried, CarryTarget, EditorSession, LiveRects } from './session'
 import { clampCells, clampPosPx, guidesFrom, intersects, magnetStep, nearestGuide, newAxis, type AxisMagnet, type Guides, type PxRect } from './snap'
 import type { Handle } from './SelectionOverlay'
 
@@ -47,6 +49,10 @@ interface Gesture {
   rot: number
   lastCell: { x: number; y: number; w: number; h: number }
   changed: boolean
+  /** where inside the block the pointer took hold (page px), so it lands under the pointer elsewhere */
+  grab: { x: number; y: number }
+  /** the page it would be let go onto, while the pointer is off this one */
+  carry: CarryTarget | null
 }
 
 const deg = (r: number) => (r * 180) / Math.PI
@@ -81,6 +87,7 @@ export class GestureController {
     r.removeEventListener('dblclick', this.onDblClick)
     if (this.raf) cancelAnimationFrame(this.raf)
     this.settle?.()
+    if (this.g?.carry) this.session.carrier?.end() // a hint painted elsewhere must not outlive us
     this.g = null
   }
 
@@ -121,6 +128,12 @@ export class GestureController {
     e.preventDefault()
     const st = useStore.getState()
     if (!(st.selection.length === 1 && st.selection[0] === id)) st.select([id])
+    if (block.type !== 'text') {
+      // taking hold of a picture is not writing: the caret leaves the text, so Delete, Cmd+C and
+      // Cmd+X are the picture's from here (preventDefault above keeps the browser from blurring)
+      const a = document.activeElement as HTMLElement | null
+      if (a?.isContentEditable && this.root.contains(a)) a.blur()
+    }
     if (block.locked && handle !== 'move') return
     const pageRect = this.root.getBoundingClientRect()
     const scale = Math.max(0.01, pageRect.width / this.root.offsetWidth)
@@ -146,6 +159,8 @@ export class GestureController {
       rot: block.rotation ?? 0,
       lastCell: { x: Math.round(start.x / PITCH), y: Math.round(start.y / PITCH), w: Math.round(start.w / PITCH), h: Math.round(start.h / PITCH) },
       changed: false,
+      grab: { x: p.x - start.x, y: p.y - start.y },
+      carry: null,
     }
     this.settle?.()
     this.settle = null
@@ -163,6 +178,7 @@ export class GestureController {
       start: { x: 0, y: 0, w: 0, h: 0 }, cur: { x: 0, y: 0, w: 0, h: 0 }, prevCellRect: { x: 0, y: 0, w: 0, h: 0 }, aspect: null,
       mx: newAxis(0), my: newAxis(0), guides: { xs: [], ys: [] }, dragging: false,
       startRot: 0, startAngle: 0, rot: 0, lastCell: { x: 0, y: 0, w: 0, h: 0 }, changed: false,
+      grab: { x: 0, y: 0 }, carry: null,
     }
   }
 
@@ -205,8 +221,9 @@ export class GestureController {
       const p = clampPosPx(rx.v, ry.v, g.cur.w, g.cur.h)
       g.cur.x = p.x
       g.cur.y = p.y
-      this.hairline('x', !Number.isNaN(rx.dot) && gx && rx.dot === gx.pos ? gx.line : null)
-      this.hairline('y', !Number.isNaN(ry.dot) && gy && gy.pos === ry.dot ? gy.line : null)
+      const off = this.carry(g, L) // pointer off this page: the hints belong to the page it is over
+      this.hairline('x', !off && !Number.isNaN(rx.dot) && gx && rx.dot === gx.pos ? gx.line : null)
+      this.hairline('y', !off && !Number.isNaN(ry.dot) && gy && gy.pos === ry.dot ? gy.line : null)
       this.write(g)
       const cx = Math.round(p.x / PITCH)
       const cy = Math.round(p.y / PITCH)
@@ -316,6 +333,7 @@ export class GestureController {
     this.session.pageEl?.setAttribute('data-gesture', g.mode)
     this.session.gesture = true
     this.session.emit('gesture', true)
+    if (g.mode === 'move') this.session.carrier?.begin()
     if (g.mode === 'resize' || g.mode === 'rotate') window.setTimeout(() => { if (this.g === g) this.session.badgeEl?.setAttribute('data-on', '1') }, 60)
   }
 
@@ -337,6 +355,27 @@ export class GestureController {
       sel.setProperty('--sw', c.w + 'px')
       sel.setProperty('--sh', c.h + 'px')
     }
+  }
+  /**
+   * Where the block would go if it were let go now — the other page of the spread under the
+   * pointer, or a page-turn arrow. Nothing is committed here: the hint is painted by the carrier
+   * (PageEditor) and the block itself stays on its own page, faded, until the release.
+   */
+  private carry(g: Gesture, L: Latest): boolean {
+    const c = this.session.carrier
+    if (!c) return false
+    const carried: Carried = { w: g.cur.w, h: g.cur.h, gx: g.grab.x, gy: g.grab.y }
+    const t = c.hit(this.session.pageIndex, L.cx, L.cy, carried)
+    if ((t?.key ?? '') !== (g.carry?.key ?? '')) {
+      const was = !!g.carry
+      g.carry = t
+      c.hint(t, carried)
+      if (was !== !!t) {
+        g.el!.classList.toggle('is-carrying', !!t)
+        this.session.selEl?.classList.toggle('is-carrying', !!t)
+      }
+    }
+    return !!g.carry
   }
   private hairline(axis: 'x' | 'y', line: number | null) {
     const el = axis === 'x' ? this.session.guideX : this.session.guideY
@@ -392,8 +431,10 @@ export class GestureController {
     }
     if (this.raf) { cancelAnimationFrame(this.raf); this.raf = 0; this.frame() }
     const wasDragging = g.dragging
+    const carry = g.carry
     this.teardown(g)
     if (!wasDragging) return
+    if (carry && g.mode === 'move') { this.session.carrier?.drop(carry, this.session.pageIndex, g.id!); return }
     if (g.mode === 'rotate') {
       const rotation = Math.abs(g.rot) < 0.05 ? undefined : g.rot
       if (rotation !== (g.block!.rotation ?? undefined)) this.commitPatch(g, { rotation })
@@ -461,6 +502,7 @@ export class GestureController {
     this.restore(g)
   }
   private restore(g: Gesture) {
+    g.carry = null
     if (g.mode !== 'empty' && g.dragging) {
       g.cur = { ...g.start }
       g.rot = g.startRot
@@ -481,8 +523,9 @@ export class GestureController {
     this.latest = null
     this.prevSample = null
     if (g.mode === 'empty') return
-    g.el?.classList.remove('is-dragging', 'is-lifted')
-    this.session.selEl?.classList.remove('is-dragging')
+    g.el?.classList.remove('is-dragging', 'is-lifted', 'is-carrying')
+    this.session.selEl?.classList.remove('is-dragging', 'is-carrying')
+    if (g.mode === 'move' && g.dragging) this.session.carrier?.end()
     delete this.root.dataset.gesture
     this.session.pageEl?.removeAttribute('data-gesture')
     this.hairline('x', null)
@@ -535,7 +578,8 @@ export class GestureController {
     }, { coalesce: 'nudge:' + ids.join(',') })
     if (moved) sound.snap()
   }
-  remove(ids: Id[]) {
+  /** `quiet`: no undo toast — a cut says it with the board it just filled, not with a message. */
+  remove(ids: Id[], opts?: { quiet?: boolean }) {
     const pi = this.session.pageIndex
     const page = this.session.page()
     if (!page) return
@@ -551,6 +595,7 @@ export class GestureController {
         return out
       })
       sound.whump()
+      if (opts?.quiet) return
       const first = gone[0].block!
       const msg = gone.length > 1 ? S.editor.removed.text : first.type === 'image' ? (first.media === 'video' ? S.editor.removed.video : S.editor.removed.image) : first.type === 'sticker' ? S.editor.removed.sticker : S.editor.removed.text
       useStore.getState().toast(msg, {

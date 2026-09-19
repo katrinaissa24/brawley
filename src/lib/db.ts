@@ -5,6 +5,7 @@
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb'
 import { useEffect, useState } from 'react'
 import { STICKER_LIBRARY, type CustomSticker, type Entry, type ExportFile, type Id, type StoredImage } from '@/model/types'
+import { decodeImage, isHeic } from './decode'
 import { nanoid } from './ids'
 import { readImageSize } from './imageSize'
 
@@ -56,13 +57,6 @@ const THUMB_SIDE = 480
 const KEEP_ORIGINAL_BYTES = 4 * 1024 * 1024
 const KEEPABLE = /^image\/(jpeg|png|webp|gif|avif)$/
 
-async function decode(file: Blob): Promise<ImageBitmap> {
-  try {
-    return await createImageBitmap(file, { imageOrientation: 'from-image' } as ImageBitmapOptions)
-  } catch {
-    return await createImageBitmap(file)
-  }
-}
 function makeCanvas(w: number, h: number): OffscreenCanvas | HTMLCanvasElement {
   if (typeof OffscreenCanvas !== 'undefined') return new OffscreenCanvas(w, h)
   const c = document.createElement('canvas')
@@ -121,9 +115,40 @@ export interface ImageDraft {
 
 export class ImageTooLargeError extends Error {}
 export class NotAnImageError extends Error {}
+/** The file is a video all right; this browser has no decoder for what is inside it (HEVC, mostly). */
+export class UnplayableVideoError extends NotAnImageError {}
 
+/* ---------- what the door lets through ----------
+ * A browser does not always know what it has been handed: a .heic or a .mov picked on Windows
+ * often arrives with no type at all, and turning those away is how an iPhone's own pictures end
+ * up refused. The name has the last word, and a retyped slice (the same bytes, no copy) gives the
+ * file back the type the rest of the pipeline reads.
+ */
+const IMAGE_EXT = /\.(jpe?g|png|gif|webp|avif|bmp|heic|heif|hif)$/i
+const VIDEO_EXT = /\.(mp4|m4v|mov|qt|webm|ogv|mkv|3gp)$/i
+const MIME: Record<string, string> = {
+  jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp',
+  avif: 'image/avif', bmp: 'image/bmp', heic: 'image/heic', heif: 'image/heif', hif: 'image/heif',
+  mp4: 'video/mp4', m4v: 'video/mp4', mov: 'video/quicktime', qt: 'video/quicktime',
+  webm: 'video/webm', ogv: 'video/ogg', mkv: 'video/x-matroska', '3gp': 'video/3gpp',
+}
+const extOf = (f: Blob) => ((f as File).name ?? '').match(/\.([a-z0-9]+)$/i)?.[1].toLowerCase() ?? ''
 /** Pictures and videos are both placeable; everything else is turned away at the door. */
-export const isMediaFile = (f: Blob) => f.type.startsWith('image/') || f.type.startsWith('video/')
+export const isMediaFile = (f: Blob) => {
+  if (f.type.startsWith('image/') || f.type.startsWith('video/')) return true
+  const name = (f as File).name ?? ''
+  return IMAGE_EXT.test(name) || VIDEO_EXT.test(name)
+}
+/** For file pickers: the types plus the extensions a browser may not map to them on its own. */
+export const IMAGE_ACCEPT = 'image/*,.heic,.heif,.hif'
+export const MEDIA_ACCEPT = 'image/*,video/*,.heic,.heif,.hif,.mov'
+/** The same bytes under the type the file's name says it is — Blob.slice re-types without copying. */
+function typed(file: Blob): Blob {
+  if (file.type && file.type !== 'application/octet-stream') return file
+  const mime = MIME[extOf(file)]
+  return mime ? file.slice(0, file.size, mime) : file
+}
+const isVideoFile = (f: Blob) => f.type.startsWith('video/') || (!f.type.startsWith('image/') && VIDEO_EXT.test((f as File).name ?? ''))
 const MAX_VIDEO_BYTES = 250 * 1024 * 1024
 
 /**
@@ -138,7 +163,7 @@ function videoPoster(file: Blob): Promise<{ width: number; height: number; poste
     v.playsInline = true
     v.preload = 'auto'
     const done = () => { window.clearTimeout(timer); v.removeAttribute('src'); v.load(); URL.revokeObjectURL(url) }
-    const fail = () => { done(); reject(new NotAnImageError('unplayable video')) }
+    const fail = () => { done(); reject(new UnplayableVideoError('unplayable video')) }
     const timer = window.setTimeout(fail, 15000)
     v.onerror = fail
     v.onloadeddata = () => {
@@ -200,18 +225,23 @@ export const db = {
    * are in IndexedDB and have taken those slots over. Callers place the block on the draft and
    * never await `stored` — only its rejection matters.
    */
-  async prepareImage(file: Blob, entryId: Id): Promise<ImageDraft> {
-    if (!file.type.startsWith('image/')) throw new NotAnImageError('not an image')
+  async prepareImage(source: Blob, entryId: Id): Promise<ImageDraft> {
+    const file = typed(source)
+    const heic = await isHeic(file)
+    if (!heic && !file.type.startsWith('image/')) throw new NotAnImageError('not an image')
     if (file.size > 25 * 1024 * 1024) throw new ImageTooLargeError('too large')
     const id = nanoid(12)
-    const head = await readImageSize(file)
+    // a HEIC is not a picture any browser but Safari can paint, so its own bytes are never put in
+    // the picture's slots: it is decoded first (src/lib/decode.ts) and the block waits behind the
+    // shimmer for the moment that takes
+    const head = heic ? null : await readImageSize(file)
     // the original is a valid picture for both slots until the processed copies exist
     let early: ImageBitmap | null = null
     if (head) {
       imageUrls.prime(id, 'thumb', file)
       imageUrls.prime(id, 'full', file)
     } else {
-      early = await decode(file)
+      early = await decodeImage(file)
     }
     const size = head ?? { width: early!.width, height: early!.height }
     // hold both slots until the record exists, so a release can't revoke them before the write
@@ -220,7 +250,7 @@ export const db = {
     const stored = (async () => {
       let bmp = early
       try {
-        if (!bmp) bmp = await decode(file)
+        if (!bmp) bmp = await decodeImage(file)
         const thumb = await scaled(bmp, THUMB_SIDE, 'image/jpeg', 0.8)
         imageUrls.prime(id, 'thumb', thumb.blob)
         const full = await fullCopy(file, bmp)
@@ -252,8 +282,9 @@ export const db = {
    * A video is stored as-is (no re-encode) with a poster frame in the thumb slot. The poster is read
    * before the block is placed — it gives the frame its aspect — and the write runs behind it.
    */
-  async prepareVideo(file: Blob, entryId: Id): Promise<ImageDraft> {
-    if (!file.type.startsWith('video/')) throw new NotAnImageError('not a video')
+  async prepareVideo(source: Blob, entryId: Id): Promise<ImageDraft> {
+    const file = typed(source)
+    if (!isVideoFile(file)) throw new NotAnImageError('not a video')
     if (file.size > MAX_VIDEO_BYTES) throw new ImageTooLargeError('too large')
     const id = nanoid(12)
     const { width, height, poster } = await videoPoster(file)
@@ -277,7 +308,7 @@ export const db = {
   },
   /** Picture or video, whichever the file is. */
   prepareMedia(file: Blob, entryId: Id): Promise<ImageDraft> {
-    return file.type.startsWith('video/') ? db.prepareVideo(file, entryId) : db.prepareImage(file, entryId)
+    return isVideoFile(typed(file)) ? db.prepareVideo(file, entryId) : db.prepareImage(file, entryId)
   },
   /** prepareImage, awaited to completion. Kept for callers that need the persisted record. */
   async importImage(file: Blob, entryId: Id): Promise<StoredImage> {
@@ -362,7 +393,7 @@ export const db = {
   },
   async addSticker(png: Blob, width: number, height: number, cut: boolean): Promise<CustomSticker> {
     const id = nanoid(12)
-    const bmp = await decode(png)
+    const bmp = await decodeImage(png)
     const thumb = await scaled(bmp, THUMB_SIDE, canWebp() ? 'image/webp' : 'image/png', 0.9)
     bmp.close?.()
     const d = await open()
@@ -402,7 +433,7 @@ export const db = {
     if (meta.mime.startsWith('video/')) {
       thumb = (await videoPoster(blob)).poster
     } else {
-      const bmp = await decode(blob)
+      const bmp = await decodeImage(blob)
       thumb = (await scaled(bmp, THUMB_SIDE, 'image/jpeg', 0.8)).blob
       bmp.close?.()
     }

@@ -7,7 +7,7 @@ import type { Cover, Hue, Id, Rect, Tint } from '@/model/types'
 import { BOOK, COVER_PAGE, spineWidth } from '@/model/types'
 import { useEntry, useStore } from '@/model/store'
 import { HUES, HUE_NAMES, HUE_ORDER, INK, inkFor } from '@/model/palette'
-import { db, ImageTooLargeError, NotAnImageError, useImageUrl } from '@/lib/db'
+import { db, ImageTooLargeError, IMAGE_ACCEPT, NotAnImageError, useImageUrl } from '@/lib/db'
 import { sound } from '@/feel/sound'
 import { S } from '@/copy/strings'
 import { Popover } from './Popover'
@@ -153,7 +153,7 @@ export function CoverInspector({ entryId, anchor }: { entryId: Id; anchor: Rect 
             ref={file}
             className="ui-file"
             type="file"
-            accept="image/*"
+            accept={IMAGE_ACCEPT}
             tabIndex={-1}
             aria-hidden="true"
             onChange={e => void addPicture(e.currentTarget.files?.[0])}

@@ -29,6 +29,10 @@ Where this file and a spec disagree, **this file wins**.
    strip in the bottom-right corner. ← / → turn the page whenever the caret is not in the writing,
    and from the far edge of the page's first / last text; a two-finger pinch on the trackpad zooms
    the page (Cmd+0 fits it back). Esc goes one level back. Everything autosaves.
+   A block dragged off the page it is on can be let go on the other page of a spread, on either
+   page-turn arrow (the page beyond the ones on the desk — past the last one it writes a new page)
+   or on the ghost "Add a page" face; it lands under the pointer and the editor follows it over.
+   Cmd+C / Cmd+X / Cmd+V move whole blocks the same way, through the editor's own board.
 
 Route state is in the store (`route`) and mirrored to the URL hash: `#/`, `#/b/<entryId>`,
 `#/b/<entryId>/p/<pageIndex>`, `#/b/<entryId>/cover`.
@@ -70,6 +74,7 @@ src/
   model/palette.ts             cover hues, default cover per month                (lead, frozen)
   model/store.ts               zustand store: entries, settings, route, undo      (lead, frozen API)
   lib/db.ts                    IndexedDB (entries, images, kv), image pipeline    (lead, frozen API)
+  lib/decode.ts, heic.worker.ts  a picture's pixels, HEIC included (§5c)          (lead)
   lib/ids.ts, lib/dates.ts     nanoid-ish ids, date formatting                    (lead)
   feel/sound.ts                WebAudio engine (API frozen)                        (lead)
   feel/spring.ts, feel/motion.ts  spring integrator, MOTION flags                 (lead)
@@ -149,7 +154,9 @@ Additive since v0.1: `dbEvents.subscribe(fn)` fires after every write to entries
 list (never settings); `db.clearJournal()` empties exactly those (not settings, not the remembered folder);
 `db.allEntries()`, `db.allImages()`, `db.replaceEntries(list)`, `db.putImageFromBlob(meta, blob, quiet?)`
 and `db.deleteImageQuiet(id)` are the folder's view of the store; `db.importJSON(data, {quiet})` skips the
-change event.
+change event. `isMediaFile(f)` is the door (the file's name counts as well as its type — §5c),
+`IMAGE_ACCEPT` / `MEDIA_ACCEPT` are what the file pickers ask for, and `UnplayableVideoError`
+(a `NotAnImageError`) is a video whose codec this browser has no decoder for.
 
 ## 5b. The journal folder (`src/lib/journalFile.ts`)
 
@@ -176,6 +183,22 @@ in the top bar, ⌘S, or Settings — and opened again from the front page or Se
 `status.unsaved` lights the capsule; the tab warns before closing on unsaved changes.
 A change of mode is applied by whoever made it, after `store.load()`, never by the status subscription
 (otherwise the starter book can seed into a journal that is still being read in).
+
+## 5c. Pictures the browser cannot read (`src/lib/decode.ts`)
+
+Everything that imports a picture goes through `decodeImage(file)`: the browser decodes it when it
+can, and when it cannot the file goes to libheif (WebAssembly) in `heic.worker.ts` — that is HEIC /
+HEIF, the format an iPhone writes, which only Safari paints. The decoder is ~2MB, so it is its own
+chunk, fetched the first time a HEIC actually turns up and let go 30s after the last one, and it
+must run in a worker (the bundle compiles its wasm synchronously, which browsers only allow off the
+main thread). It returns the **primary** image — a HEIC also carries thumbnails, depth maps and
+rotated variants — with the file's rotation already applied, and the picture is then stored as a
+JPEG like any other, so a journal stays readable in a browser that has never heard of HEIC.
+(`libheif-js` is LGPL-3.0 and is loaded unmodified, as its own chunk.)
+
+A browser does not always know what it has been handed: a `.heic` or a `.mov` often arrives with no
+type at all. The file's name has the last word (`isMediaFile`), a retyped slice gives it back the
+type the pipeline reads, and a HEIC with neither name nor type is known by the brand in its header.
 
 ## 6. Sound contract (frozen — `src/feel/sound.ts`)
 
@@ -218,6 +241,15 @@ flow-root on `.ed-text`).
   `touch-action: none` on the page, preventDefault `dragstart` inside the page root.
 - Cover pictures are stored in `images` with the entry's id and are never GC'd while referenced
   (`db.gcImages` already respects `cover.imageId`). Pasted image *URLs* are treated as text.
+- A picture is a row in `images`, not bytes the system clipboard carries: Cmd+C / Cmd+X put the
+  selected blocks on the editor's own board (`src/editor/clipboard.ts`) and write their words to
+  the system clipboard, and Cmd+V lays down fresh-id copies unless the clipboard has since been
+  written by another app (the board's text no longer matches) — then the text wins. A picture
+  pasted into another book gets its own copy of the file under that book's id.
+- Carrying a block between pages is the GestureController asking `session.carrier` (PageEditor
+  implements it) once a frame while a move gesture is on: it hit-tests the open faces, the
+  page-turn arrows and the ghost face, paints the same dashed rect a dropped file gets, and
+  commits nothing until the release.
 - Reduced motion keys off `html[data-reduce-motion="on"]` (set by App) and `MOTION.reduced`.
 - Entry stats (`pages`, `words`, `text`) are derived by the store at every commit; search and spine
   width read them.

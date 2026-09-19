@@ -9,17 +9,11 @@
  * Both return a PNG (alpha kept) and its pixel size.
  */
 
+import { decodeImage } from './decode'
+
 const MAX_SIDE = 900
 
 export interface StickerImage { blob: Blob; width: number; height: number }
-
-async function load(file: Blob): Promise<ImageBitmap> {
-  try {
-    return await createImageBitmap(file, { imageOrientation: 'from-image' } as ImageBitmapOptions)
-  } catch {
-    return await createImageBitmap(file)
-  }
-}
 
 function canvas(w: number, h: number) {
   const c = document.createElement('canvas')
@@ -40,7 +34,7 @@ function drawScaled(bmp: ImageBitmap, max: number) {
 }
 
 export async function keepSticker(file: Blob): Promise<StickerImage> {
-  const bmp = await load(file)
+  const bmp = await decodeImage(file)
   const c = drawScaled(bmp, MAX_SIDE)
   bmp.close?.()
   return { blob: await png(c), width: c.width, height: c.height }
@@ -112,7 +106,7 @@ function dropSpecks(bg: Uint8Array, w: number, h: number) {
  * background, or it would remove almost everything) — the caller then offers only "as is".
  */
 export async function cutSticker(file: Blob): Promise<StickerImage | null> {
-  const bmp = await load(file)
+  const bmp = await decodeImage(file)
   const src = drawScaled(bmp, MAX_SIDE)
   bmp.close?.()
   const w = src.width, h = src.height

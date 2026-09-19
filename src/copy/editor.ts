@@ -73,6 +73,7 @@ export const editor = {
   image: {
     tooBig: 'That file is too large to keep',
     unsupported: "That file isn't a picture or a video this browser can play",
+    unplayable: "This browser can't play that video — an MP4 will work",
     failed: "Couldn't read that file",
     dropHere: 'Drop to place',
     replace: 'Choose a picture or video',

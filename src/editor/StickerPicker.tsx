@@ -8,7 +8,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { S } from '@/copy/strings'
 import { sound } from '@/feel/sound'
-import { db, useImageUrl } from '@/lib/db'
+import { db, IMAGE_ACCEPT, useImageUrl } from '@/lib/db'
 import { PITCH, type CustomSticker, type Rect, type StickerSource } from '@/model/types'
 import { Sticker } from './Sticker'
 import { StickerMaker } from './StickerMaker'
@@ -389,7 +389,7 @@ function MineTab({ onPick }: { onPick(source: StickerSource, w: number, h: numbe
       <input
         ref={input}
         type="file"
-        accept="image/*"
+        accept={IMAGE_ACCEPT}
         hidden
         tabIndex={-1}
         aria-hidden="true"

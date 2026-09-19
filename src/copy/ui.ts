@@ -174,6 +174,7 @@ export const ui = {
       sticker: 'Sticker',
       dateStamp: 'Date stamp',
       wrap: 'Wrap mode, with a picture selected',
+      clipboard: 'Copy, cut and paste what is selected',
       prevNext: 'Previous / next page',
       zoomPage: 'Zoom out, in, fit',
       deselect: 'Deselect, then back to book',

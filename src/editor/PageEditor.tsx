@@ -12,8 +12,10 @@
  * insertion, paste, the toolbars) goes to the *active* face: the one last written in or pressed.
  *
  * The InsertRail sits beside the pages in the same unscaled stage. DocumentView does the
- * rendering + gestures; this file owns chrome, keys, insertion, paste/drop, page navigation,
- * overflow continuation, the dot-grid moods and the save chime.
+ * rendering + gestures; this file owns chrome, keys, insertion, copy/cut/paste, drop, page
+ * navigation, overflow continuation, the dot-grid moods and the save chime. It is also the
+ * carrier (session.ts): a block dragged off its page asks here where the pointer is — the other
+ * page of the spread, a page-turn arrow, the ghost page after the last one — and is handed over.
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { flip } from '@/book/flip'
@@ -21,13 +23,13 @@ import { S } from '@/copy/strings'
 import { MOTION } from '@/feel/motion'
 import { sound } from '@/feel/sound'
 import { formatLong } from '@/lib/dates'
-import { isMediaFile, useImageUrl } from '@/lib/db'
+import { isMediaFile, MEDIA_ACCEPT, useImageUrl } from '@/lib/db'
 import { HUES, INK, coverHex, inkFor } from '@/model/palette'
 import { chapterAt, removeChapterAt, setChapterTitle as renameChapter, startChapterAt, startsChapter } from '@/model/contents'
 import { useEntry, useStore } from '@/model/store'
 import {
   CONTENT, COVER_PAGE, PAGE, PAGE_MARGIN, PITCH, editorFaces, spreadOfPage,
-  type Entry, type Id, type Rect, type StickerSource, type TextBlock, type TextFont, type TextKind,
+  type Block, type Entry, type Id, type Rect, type StickerSource, type TextBlock, type TextFont, type TextKind,
 } from '@/model/types'
 import { BubbleToolbar } from './BubbleToolbar'
 import { DocumentView } from './DocumentView'
@@ -35,10 +37,11 @@ import { ImageToolbar } from './ImageToolbar'
 import { InsertRail } from './InsertRail'
 import { splitAtOverflow } from './blocks/TextBody'
 import { caretEdges, selectionRect } from './caret'
-import { addBlock, addPageAfter, pageOf, continueOnNextPage, firstFreeRow, newStickerBlock, newTextBlock, readingOrder, textBlocks, updateBlock } from './ops'
+import { adoptMedia, clipboard, type Board } from './clipboard'
+import { addBlock, addPageAfter, pageOf, continueOnNextPage, firstFreeRow, moveBlockToPage, newStickerBlock, newTextBlock, pasteBlocks, readingOrder, textBlocks, updateBlock } from './ops'
 import { sanitizeHtml } from './sanitize'
-import { EditorSession } from './session'
-import { CONTENT_MAX_X, CONTENT_MAX_Y } from './snap'
+import { EditorSession, type Carrier, type CarryTarget } from './session'
+import { CONTENT_MAX_X, CONTENT_MAX_Y, clampCells } from './snap'
 import { randomRotation, stickerById } from './stickers'
 import { useImageImport, type PendingImage } from './useImageImport'
 import './editor.css'
@@ -77,6 +80,8 @@ function facesOf(pageCount: number, pageIndex: number, twoPage: boolean): Face[]
 }
 /** Element registry for one open face. */
 interface Surface { page: HTMLElement; scaled: HTMLElement; ghost: HTMLElement }
+/** A place off the page a dragged block can be let go on: an arrow, or the ghost face after the last page. */
+interface Spot { key: string; target: CarryTarget; el: HTMLElement; r: DOMRect }
 
 export function PageEditor() {
   const route = useStore(s => s.route)
@@ -125,7 +130,13 @@ function Editor({ entry, pageIndex, routeIndex }: { entry: Entry; pageIndex: num
   const sessionsRef = useRef(sessions)
   sessionsRef.current = sessions
   const activate = useCallback((i: number) => setActivePage(p => (p === i ? p : i)), [])
-  useEffect(() => { setActivePage(pageIndex) }, [pageIndex])
+  /** a face a block was just carried to keeps the caret's attention through the turn that follows */
+  const wanted = useRef<number | null>(null)
+  useEffect(() => {
+    const w = wanted.current
+    wanted.current = null
+    setActivePage(w ?? pageIndex)
+  }, [pageIndex])
 
   const isCover = activeIndex === COVER_PAGE
   const page = pageOf(entry, activeIndex)!
@@ -392,6 +403,118 @@ function Editor({ entry, pageIndex, routeIndex }: { entry: Entry; pageIndex: num
     goTo(pageIndex === COVER_PAGE ? 0 : pageIndex + 1, 1)
   }, [canBack, atEnd, twoPage, pageIndex, pageCount, goTo, addPage])
 
+  /* ---------- carrying a block to another page ----------
+   * A picture dragged off the page it sits on can be let go on the other page of a spread, on
+   * either page-turn arrow (the page beyond the ones on the desk) or on the ghost face after the
+   * last page, which writes one. The GestureController asks through `session.carrier` once a
+   * frame and commits nothing until the release; the hint is the same dashed rect a dropped file
+   * gets. Rects are read once per drag — nothing but a scroll can move under a pointer that is
+   * down, and that is taken off the pointer instead.
+   */
+  const carried = useRef<{ faces: { page: number; r: DOMRect }[]; spots: Spot[]; sx: number; sy: number }>({ faces: [], spots: [], sx: 0, sy: 0 })
+  const carryOff = useCallback(() => {
+    for (const s of surfaces.values()) { s.ghost.removeAttribute('data-on'); s.page.removeAttribute('data-carry') }
+    for (const s of carried.current.spots) s.el.removeAttribute('data-drop')
+  }, [surfaces])
+
+  const carrier = useMemo<Carrier>(() => {
+    const backPage = !canBack ? null
+      : twoPage ? editorFaces(spreadOfPage(pageIndex) - 1)[1]
+      : pageIndex === 0 ? COVER_PAGE : pageIndex - 1
+    const fwdPage = twoPage ? editorFaces(spreadOfPage(pageIndex) + 1)[0] : pageIndex === COVER_PAGE ? 0 : pageIndex + 1
+    const inside = (r: DOMRect, x: number, y: number, pad = 0) =>
+      x >= r.left - pad && x <= r.right + pad && y >= r.top - pad && y <= r.bottom + pad
+    return {
+      begin() {
+        const cache = carried.current
+        cache.faces = Array.from(surfaces, ([page, s]) => ({ page, r: s.scaled.getBoundingClientRect() }))
+        cache.sx = scrollRef.current?.scrollLeft ?? 0
+        cache.sy = scrollRef.current?.scrollTop ?? 0
+        const spots: Spot[] = []
+        const add = (el: HTMLElement | null | undefined, key: string, page: number, kind: CarryTarget['kind']) => {
+          const r = el?.getBoundingClientRect()
+          if (!el || !r || r.width < 1) return
+          spots.push({ key, target: { page, kind, at: null, key }, el, r })
+        }
+        const root = rootRef.current
+        if (backPage !== null) add(root?.querySelector('.ed-arrow.-back'), 'back', backPage, 'arrow')
+        if (atEnd) add(root?.querySelector('.ed-arrow.-fwd'), 'fwd-new', pageCount, 'new')
+        else add(root?.querySelector('.ed-arrow.-fwd'), 'fwd', fwdPage, 'arrow')
+        add(stageRef.current?.querySelector('.ed-addface'), 'addface', pageCount, 'new')
+        cache.spots = spots
+      },
+      end() {
+        carryOff()
+        carried.current.spots = []
+      },
+      hit(from, clientX, clientY, c) {
+        const cache = carried.current
+        // the pages ride the scroller; the arrows are pinned to the window
+        const fx = clientX + ((scrollRef.current?.scrollLeft ?? 0) - cache.sx)
+        const fy = clientY + ((scrollRef.current?.scrollTop ?? 0) - cache.sy)
+        for (const f of cache.faces) {
+          if (!inside(f.r, fx, fy)) continue
+          if (f.page === from) return null // still its own page
+          const s = Math.max(0.01, f.r.width / PAGE.w)
+          const x = Math.round(((fx - f.r.left) / s - c.gx) / PITCH)
+          const y = Math.round(((fy - f.r.top) / s - c.gy) / PITCH)
+          const at = clampCells({ x, y, w: Math.round(c.w / PITCH), h: Math.round(c.h / PITCH) }, 1, 1)
+          return { page: f.page, kind: 'face', at: { x: at.x, y: at.y }, key: `face:${f.page}:${at.x},${at.y}` }
+        }
+        for (const s of cache.spots) if (inside(s.r, clientX, clientY, 14)) return s.target
+        return null
+      },
+      hint(target, c) {
+        carryOff()
+        if (!target) return
+        if (target.kind === 'face') {
+          const s = surfaces.get(target.page)
+          if (!s || !target.at) return
+          const g = s.ghost.style
+          g.setProperty('--gx', target.at.x * PITCH + 'px')
+          g.setProperty('--gy', target.at.y * PITCH + 'px')
+          g.setProperty('--gw', c.w + 'px')
+          g.setProperty('--gh', c.h + 'px')
+          s.ghost.dataset.on = '1'
+          s.page.dataset.carry = '1'
+          return
+        }
+        carried.current.spots.find(s => s.key === target.key)?.el.setAttribute('data-drop', '1')
+      },
+      drop(target, from, id) {
+        const src = pool.get(from)
+        src?.flushAll()
+        const cur = useStore.getState().entries[entry.id]
+        if (!cur) return
+        let next = cur
+        let page = target.page
+        if (target.kind === 'new') {
+          const r = addPageAfter(next, next.pages.length - 1)
+          next = r.entry
+          page = r.index
+        }
+        const moved = moveBlockToPage(next, from, page, id, target.at ?? undefined, src?.heights.get(id))
+        if (moved === next) return // the block went away under the drag
+        sessionFor(page).justAdded.add(id)
+        useStore.getState().commitEntry(moved)
+        useStore.getState().select([id])
+        sound.shff()
+        activate(page)
+        if (target.kind === 'face') return
+        // through an arrow: follow the block over, and keep the caret's attention on its new page
+        wanted.current = page
+        setDir(page === COVER_PAGE || page < from ? -1 : 1)
+        useStore.getState().openPage(entry.id, twoPage ? editorFaces(spreadOfPage(page))[0] : page)
+        if (target.kind === 'new') useStore.getState().toast(S.editor.pageAdded)
+      },
+    }
+  }, [surfaces, pool, sessionFor, activate, carryOff, entry.id, twoPage, pageIndex, pageCount, canBack, atEnd])
+
+  useEffect(() => {
+    for (const s of sessions) s.carrier = carrier
+    return () => { for (const s of sessions) if (s.carrier === carrier) s.carrier = null }
+  }, [sessions, carrier])
+
   const close = useCallback(() => {
     for (const s of sessions) s.flushAll()
     setClosing(true)
@@ -423,6 +546,56 @@ function Editor({ entry, pageIndex, routeIndex }: { entry: Entry; pageIndex: num
     session.commit(e => addBlock(e, session.pageIndex, nb))
     st.select([nb.id])
   }, [session, scale])
+
+  /* ---------- copy / cut / paste of whole blocks ----------
+   * A picture is a file in the database, not bytes the system clipboard carries from page to page,
+   * so Cmd+C / Cmd+X put the selected blocks on the editor's own board (clipboard.ts) and write
+   * their words to the system clipboard; Cmd+V lays copies down on the active face, stepping aside
+   * each time it is pasted onto the same page. Writing inside a text block keeps its own copy and
+   * paste — those events never reach here.
+   */
+  const copyBlocks = useCallback((cut: boolean, data: DataTransfer | null): boolean => {
+    const st = useStore.getState()
+    const s = sessionRef.current
+    if (!st.selection.length) return false
+    s.flushAll() // a block cut mid-sentence goes to the board with the sentence in it
+    const page = s.page()
+    if (!page) return false
+    const blocks = st.selection.map(id => page.blocks.find(b => b.id === id)).filter((b): b is Block => !!b)
+    if (!blocks.length) return false
+    const text = clipboard.put(entry.id, s.pageIndex, blocks)
+    try { data?.setData('text/plain', text) } catch { /* a board with no words is still a board */ }
+    if (cut) s.controller?.remove(blocks.map(b => b.id), { quiet: true })
+    return true
+  }, [entry.id])
+
+  const pasteBoard = useCallback((board: Board) => {
+    const s = sessionRef.current
+    s.flushAll()
+    const cur = s.entry()
+    if (!cur) return
+    const { entry: next, ids } = pasteBlocks(cur, s.pageIndex, board.blocks, clipboard.step(entry.id, s.pageIndex))
+    if (!ids.length) return
+    for (const id of ids) s.justAdded.add(id)
+    useStore.getState().commitEntry(next)
+    useStore.getState().select(ids)
+    sound.snap()
+    // a picture from another book needs its own copy of the file under this book's id
+    if (board.entryId !== entry.id) void adoptMedia(entry.id, s.pageIndex, ids)
+  }, [entry.id])
+
+  /**
+   * Cmd+C / Cmd+X / Cmd+V are the clipboard events' work — they are the only place the system
+   * clipboard can be read or written. The keys below them are a net for browsers that fire no
+   * clipboard event while nothing on the page is selected; `clipAt` keeps the two from doubling up.
+   */
+  const clipAt = useRef({ copy: 0, cut: 0, paste: 0 })
+  const clipOnce = useCallback((what: 'copy' | 'cut' | 'paste', run: () => void) => {
+    const now = performance.now()
+    if (now - clipAt.current[what] < 400) return
+    clipAt.current[what] = now
+    run()
+  }, [])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -486,6 +659,13 @@ function Editor({ entry, pageIndex, routeIndex }: { entry: Entry; pageIndex: num
         }
       }
       if (inEditable || st.popover) return
+      // the net under the clipboard events: some browsers fire none while no text is selected
+      const clip = meta && !e.shiftKey && !e.altKey ? k.toLowerCase() : ''
+      if (clip === 'c' || clip === 'x' || clip === 'v') {
+        if (clip === 'v') window.setTimeout(() => { const b = clipboard.take(null); if (b) clipOnce('paste', () => pasteBoard(b)) }, 0)
+        else if (st.selection.length) window.setTimeout(() => clipOnce(clip === 'x' ? 'cut' : 'copy', () => { copyBlocks(clip === 'x', null) }), 0)
+        return
+      }
       const ctl = session.controller
       if (!ctl || !st.selection.length) return
       if (k === 'ArrowLeft' || k === 'ArrowRight' || k === 'ArrowUp' || k === 'ArrowDown') {
@@ -503,18 +683,37 @@ function Editor({ entry, pageIndex, routeIndex }: { entry: Entry; pageIndex: num
     }
     window.addEventListener('keydown', onKey, { capture: true })
     return () => window.removeEventListener('keydown', onKey, { capture: true })
-  }, [session, pool, go, addPage, zoom, close, openStickerPicker, addSticker, canBack, atEnd])
+  }, [session, pool, go, addPage, zoom, close, openStickerPicker, addSticker, canBack, atEnd, copyBlocks, pasteBoard, clipOnce])
 
-  /* ---------- paste onto the page (nothing focused) ---------- */
+  /* ---------- the clipboard events: a block on the board, a file or words on the page ---------- */
   useEffect(() => {
+    const chrome = (t: HTMLElement | null) =>
+      !!t && (t.isContentEditable || t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT')
+    const onCopy = (e: ClipboardEvent) => {
+      if (chrome(e.target as HTMLElement | null) || useStore.getState().popover) return
+      const cut = e.type === 'cut'
+      clipOnce(cut ? 'cut' : 'copy', () => { if (copyBlocks(cut, e.clipboardData)) e.preventDefault() })
+    }
     const onPaste = (e: ClipboardEvent) => {
       const t = e.target as HTMLElement | null
-      if (t && (t.isContentEditable || t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return
       if (useStore.getState().popover) return
       const files = Array.from(e.clipboardData?.files ?? []).filter(isMediaFile)
-      if (files.length) { e.preventDefault(); void importFiles(files); return }
       const html = e.clipboardData?.getData('text/html') ?? ''
       const text = e.clipboardData?.getData('text/plain') ?? ''
+      if (chrome(t)) {
+        // a field owns its own paste — unless the caret is in the page's writing and what is on
+        // the board is a picture, which has no words for a sentence and belongs on the page
+        if (files.length || html || text.trim()) return
+        if (!t?.isContentEditable || !rootRef.current?.contains(t)) return
+        const board = clipboard.take(text)
+        if (!board) return
+        e.preventDefault()
+        clipOnce('paste', () => pasteBoard(board))
+        return
+      }
+      if (files.length) { e.preventDefault(); void importFiles(files); return }
+      const board = clipboard.take(text)
+      if (board) { e.preventDefault(); clipOnce('paste', () => pasteBoard(board)); return }
       if (!html && !text.trim()) return
       e.preventDefault()
       const p = session.page()
@@ -525,9 +724,15 @@ function Editor({ entry, pageIndex, routeIndex }: { entry: Entry; pageIndex: num
       session.commit(en => addBlock(en, session.pageIndex, nb))
       session.focus(nb.id, 'end')
     }
+    document.addEventListener('copy', onCopy)
+    document.addEventListener('cut', onCopy)
     document.addEventListener('paste', onPaste)
-    return () => document.removeEventListener('paste', onPaste)
-  }, [session, importFiles])
+    return () => {
+      document.removeEventListener('copy', onCopy)
+      document.removeEventListener('cut', onCopy)
+      document.removeEventListener('paste', onPaste)
+    }
+  }, [session, importFiles, copyBlocks, pasteBoard, clipOnce])
 
   /* ---------- drag-drop of files: snapped dashed ghost on the page under the pointer ---------- */
   const drop = useRef<{ page: number; x: number; y: number } | null>(null)
@@ -929,7 +1134,7 @@ function Editor({ entry, pageIndex, routeIndex }: { entry: Entry; pageIndex: num
           onRemove={() => session.controller?.remove([imageSel.id])}
         />
       )}
-      <input ref={fileRef} type="file" accept="image/*,video/*" multiple hidden tabIndex={-1} aria-hidden="true" onChange={onFiles} />
+      <input ref={fileRef} type="file" accept={MEDIA_ACCEPT} multiple hidden tabIndex={-1} aria-hidden="true" onChange={onFiles} />
     </div>
   )
 }
