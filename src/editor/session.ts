@@ -25,6 +25,37 @@ export type SessionEvent =
   | 'link' // (id, anchor: Rect | null) a selection is waiting for a link address
 type Listener = (...args: any[]) => void
 
+/* ---------- carrying a block off its page ---------- */
+
+/** A place a dragged block can be let go of that is not the page it started on. */
+export interface CarryTarget {
+  /** the page it lands on (COVER_PAGE is the cover); for 'new' it is the page that will be written */
+  page: number
+  /** 'face': the other page of the spread, under the pointer · 'arrow': a page-turn button · 'new': a page written for it */
+  kind: 'face' | 'arrow' | 'new'
+  /** where it lands, in cells — the pointer's own spot on a face, its old one through an arrow */
+  at: { x: number; y: number } | null
+  /** identity of the hint being shown; a new one repaints it */
+  key: string
+}
+/** The block under the pointer, in page px: its size and where inside it the pointer took hold. */
+export interface Carried { w: number; h: number; gx: number; gy: number }
+/**
+ * PageEditor's answer to "is the pointer somewhere else now?". It owns the open faces, the
+ * page-turn arrows and the book, so the gesture only asks and, on release, hands the block over.
+ */
+export interface Carrier {
+  /** a move gesture started / ended: the element rects are cached in between */
+  begin(): void
+  end(): void
+  /** The target under a client point, or null while the block belongs to the page it is on. */
+  hit(from: number, clientX: number, clientY: number, c: Carried): CarryTarget | null
+  /** Paint the landing hint for a target, or clear it. */
+  hint(target: CarryTarget | null, c: Carried): void
+  /** Let it go: the block leaves `from` and lands on the target. */
+  drop(target: CarryTarget, from: number, id: Id): void
+}
+
 export class EditorSession {
   /** block root elements */
   readonly els = new Map<Id, HTMLElement>()
@@ -47,6 +78,8 @@ export class EditorSession {
   guideY: HTMLElement | null = null
   badgeEl: HTMLElement | null = null
   controller: GestureController | null = null
+  /** set by PageEditor on every open face: where a block dragged off this page can go */
+  carrier: Carrier | null = null
   pendingFocus: { id: Id; where: 'start' | 'end' } | null = null
   /** the selection a field took the focus away from, so a link can still be put around it */
   savedRange: Range | null = null

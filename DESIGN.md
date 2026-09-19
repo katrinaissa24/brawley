@@ -29,6 +29,10 @@ Where this file and a spec disagree, **this file wins**.
    strip in the bottom-right corner. ← / → turn the page whenever the caret is not in the writing,
    and from the far edge of the page's first / last text; a two-finger pinch on the trackpad zooms
    the page (Cmd+0 fits it back). Esc goes one level back. Everything autosaves.
+   A block dragged off the page it is on can be let go on the other page of a spread, on either
+   page-turn arrow (the page beyond the ones on the desk — past the last one it writes a new page)
+   or on the ghost "Add a page" face; it lands under the pointer and the editor follows it over.
+   Cmd+C / Cmd+X / Cmd+V move whole blocks the same way, through the editor's own board.
 
 Route state is in the store (`route`) and mirrored to the URL hash: `#/`, `#/b/<entryId>`,
 `#/b/<entryId>/p/<pageIndex>`, `#/b/<entryId>/cover`.
@@ -218,6 +222,15 @@ flow-root on `.ed-text`).
   `touch-action: none` on the page, preventDefault `dragstart` inside the page root.
 - Cover pictures are stored in `images` with the entry's id and are never GC'd while referenced
   (`db.gcImages` already respects `cover.imageId`). Pasted image *URLs* are treated as text.
+- A picture is a row in `images`, not bytes the system clipboard carries: Cmd+C / Cmd+X put the
+  selected blocks on the editor's own board (`src/editor/clipboard.ts`) and write their words to
+  the system clipboard, and Cmd+V lays down fresh-id copies unless the clipboard has since been
+  written by another app (the board's text no longer matches) — then the text wins. A picture
+  pasted into another book gets its own copy of the file under that book's id.
+- Carrying a block between pages is the GestureController asking `session.carrier` (PageEditor
+  implements it) once a frame while a move gesture is on: it hit-tests the open faces, the
+  page-turn arrows and the ghost face, paints the same dashed rect a dropped file gets, and
+  commits nothing until the release.
 - Reduced motion keys off `html[data-reduce-motion="on"]` (set by App) and `MOTION.reduced`.
 - Entry stats (`pages`, `words`, `text`) are derived by the store at every commit; search and spine
   width read them.

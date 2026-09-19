@@ -73,6 +73,37 @@ export function duplicateBlock(e: Entry, pi: number, id: Id): { entry: Entry; id
   return { entry: addBlock(e, pi, copy), id: copy.id }
 }
 
+/**
+ * Carry a block to another page of the same book: it leaves the page it sat on and lands at `at`
+ * (cells) or, when nothing pointed at a spot, the one it already had. It keeps its id — a page is
+ * only where a block lives, so the selection and every undo snapshot follow it across.
+ */
+export function moveBlockToPage(e: Entry, from: number, to: number, id: Id, at?: { x: number; y: number }, heightPx?: number): Entry {
+  if (from === to) return e
+  const b = blockOf(e, from, id)
+  if (!b || !pageOf(e, to)) return e
+  const size = sizeCells(b, heightPx)
+  const r = clampCells({ x: at?.x ?? b.x, y: at?.y ?? b.y, w: size.w, h: size.h }, b.type === 'text' ? MIN_TEXT_W : MIN_BLOCK, 1)
+  return addBlock(removeBlock(e, from, id), to, { ...b, x: r.x, y: r.y } as Block)
+}
+
+/**
+ * Lay copies of `blocks` on a page (paste): fresh ids, `shift` cells down and to the right of where
+ * they were cut or copied from, so a paste onto the page they came from does not hide under them.
+ */
+export function pasteBlocks(e: Entry, pi: number, blocks: Block[], shift = 0): { entry: Entry; ids: Id[] } {
+  let out = e
+  const ids: Id[] = []
+  for (const b of blocks) {
+    const size = sizeCells(b)
+    const r = clampCells({ x: b.x + shift, y: b.y + shift, w: size.w, h: size.h }, b.type === 'text' ? MIN_TEXT_W : MIN_BLOCK, 1)
+    const copy = { ...b, id: nanoid(), x: r.x, y: r.y } as Block
+    out = addBlock(out, pi, copy)
+    ids.push(copy.id)
+  }
+  return { entry: out, ids }
+}
+
 /* ---------- geometry ---------- */
 
 /** Size in cells; text blocks use the measured height when supplied (else minH or 2). */
