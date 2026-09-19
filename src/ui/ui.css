@@ -40,7 +40,9 @@ html[data-theme="dark"] {
 .ui-wordmark {
   font-family: var(--serif); font-size: 16px; font-weight: 700; letter-spacing: -0.01em; color: var(--fg);
   padding: 0 6px; height: 30px; display: inline-flex; align-items: center; border-radius: 8px;
+  transition: background 120ms var(--ui-ease);
 }
+button.ui-wordmark:hover { background: var(--ui-hover); }
 .ui-capsule {
   display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px; border-radius: 999px;
   background: var(--ui-paper); box-shadow: var(--ui-shadow-soft), inset 0 0 0 1px var(--rule);
@@ -172,6 +174,8 @@ html[data-theme="dark"] .ui-scrim { background: rgba(var(--shadow-ink), 0.55); }
 .ui-note { color: var(--muted); font-size: 12px; line-height: 1.45; margin: 6px 0 2px; }
 .ui-note--serif { font-family: var(--serif); font-style: italic; font-size: 12.5px; }
 .ui-hint { color: var(--muted); font-size: 12px; margin: 2px 0 6px; }
+.ui-hint--gap { margin-top: 10px; }
+.ui-where { font-family: var(--serif); font-size: 13.5px; color: var(--fg); margin: 2px 0 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* text buttons */
 .ui-btn {

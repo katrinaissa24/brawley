@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { ExportFile, Rect } from '@/model/types'
 import { useStore } from '@/model/store'
 import { db } from '@/lib/db'
+import { fileAccessSupported, journalFile } from '@/lib/journalFile'
 import { todayISO } from '@/lib/dates'
 import { sound } from '@/feel/sound'
 import { S } from '@/copy/strings'
@@ -15,8 +16,9 @@ import { Icon, Row, Section, Segmented, Slider, Switch } from './controls'
 export function SettingsPopover({ anchor }: { anchor: Rect }) {
   const settings = useStore(s => s.settings)
   const set = useStore(s => s.setSettings)
+  const journal = useStore(s => s.journal)
   const [volume, setVolume] = useState(Math.round(settings.soundVolume * 100))
-  const [busy, setBusy] = useState<'export' | 'import' | 'wipe' | null>(null)
+  const [busy, setBusy] = useState<'export' | 'import' | 'wipe' | 'file' | null>(null)
   const [confirming, setConfirming] = useState(false)
   const [word, setWord] = useState('')
   const file = useRef<HTMLInputElement>(null)
@@ -62,6 +64,26 @@ export function SettingsPopover({ anchor }: { anchor: Rect }) {
     } finally {
       setBusy(null)
       if (file.current) file.current.value = ''
+    }
+  }
+  /** move the journal into a new file, or open another one in its place */
+  const changeFile = async (how: 'new' | 'open') => {
+    if (busy) return
+    setBusy('file')
+    const s = useStore.getState()
+    try {
+      const next = how === 'new' ? await journalFile.createNew() : await journalFile.openExisting()
+      if (!next) return
+      await s.load()
+      const st = useStore.getState()
+      st.setJournal(next)
+      if (how === 'open') { st.markSeeded(); st.toast(T.openedFile(next.fileName ?? '', st.order.length)) }
+      else st.toast(T.movedTo(next.fileName ?? ''))
+    } catch (err) {
+      console.warn('journal file', err)
+      s.toast(err instanceof Error && err.message === 'not a journal' ? T.notAJournal : T.importBad)
+    } finally {
+      setBusy(null)
     }
   }
   const armed = word.trim().toLowerCase() === T.deleteWord
@@ -141,7 +163,15 @@ export function SettingsPopover({ anchor }: { anchor: Rect }) {
         </Section>
 
         <Section title={T.journal}>
-          <p className="ui-hint">{T.exportHint}</p>
+          <p className="ui-where">{journal.mode === 'file' && journal.fileName ? T.keptIn(journal.fileName) : T.keptInBrowser}</p>
+          <p className="ui-hint">{journal.mode === 'file' ? T.fileHint : T.browserHint}</p>
+          {fileAccessSupported && (
+            <div className="ui-btnrow">
+              <button type="button" className="ui-btn" disabled={busy !== null} onClick={() => void changeFile('open')}>{T.changeFile}</button>
+              <button type="button" className="ui-btn" disabled={busy !== null} onClick={() => void changeFile('new')}>{T.saveAs}</button>
+            </div>
+          )}
+          <p className="ui-hint ui-hint--gap">{T.exportHint}</p>
           <div className="ui-btnrow">
             <button type="button" className="ui-btn" disabled={busy !== null} onClick={() => void exportJSON()}>
               {busy === 'export' ? T.exporting : T.export}
@@ -159,6 +189,10 @@ export function SettingsPopover({ anchor }: { anchor: Rect }) {
               onChange={e => void importJSON(e.currentTarget.files?.[0])}
             />
           </div>
+        </Section>
+
+        <Section title={T.about}>
+          <button type="button" className="ui-btn ui-btn--block" onClick={() => useStore.getState().setFront(true)}>{T.frontPage}</button>
         </Section>
 
         <Section title={T.keyboard}>

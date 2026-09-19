@@ -94,7 +94,9 @@ export function TopBar() {
       <header className="ui-topbar" data-view={route.view} aria-label={S.ui.a11y.topbar}>
         <div className="ui-topbar__side ui-topbar__side--left">
           {route.view === 'shelf' ? (
-            <span className="ui-wordmark">{T.wordmark}</span>
+            <button type="button" className="ui-wordmark" title={T.frontPage} aria-label={T.frontPage} onClick={() => useStore.getState().setFront(true)}>
+              {T.wordmark}
+            </button>
           ) : (
             <>
               <button type="button" className="ui-capsule ui-back" onClick={onBack}>

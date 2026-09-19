@@ -121,7 +121,7 @@ function cascade(pusher0: Pt[], run: { id: string; left: number; w: number }[]):
 }
 
 /** Every book that slides, and by how much (px, signed: right is positive), when slot `i` is hovered. */
-export function makeRoom(slots: Slot[], i: number): Shove[] {
+export function makeRoom(slots: readonly Pick<Slot, 'id' | 'x' | 'w'>[], i: number): Shove[] {
   const h = slots[i]
   if (!h) return []
   const pose: Pose = { rx: -HOVER.tip * OVERSHOOT, ry: -HOVER.swing * OVERSHOOT, tz: HOVER.pull * OVERSHOOT, tx: 0 }

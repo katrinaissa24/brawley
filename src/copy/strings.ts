@@ -4,4 +4,5 @@ import { book } from './book'
 import { editor } from './editor'
 import { editorChrome } from './editorChrome'
 import { ui } from './ui'
-export const S = { app: { name: 'Folio' }, shelf, book, editor, editorChrome, ui } as const
+import { landing } from './landing'
+export const S = { app: { name: 'Brawley' }, shelf, book, editor, editorChrome, ui, landing } as const
