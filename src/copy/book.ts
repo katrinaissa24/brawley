@@ -12,9 +12,17 @@ export const book = {
   changeDate: 'Change the date',
   close: 'Back to the shelf',
   pageOf: (n: number, total: number) => `Page ${n} of ${total}`,
+  contents: 'Contents',
+  contentsEmpty: 'Give a page a title and it will appear here',
+  contentsHint: 'A page that opens with a title starts an entry',
+  untitledChapter: (n: number) => `Chapter ${n}`,
+  untitledEntry: 'Untitled',
+  entryPages: (n: number) => (n === 1 ? '1 page' : `${n} pages`),
   a11y: {
     scene: 'Open book',
     flipZone: 'Turn the page',
     caption: (title: string, date: string) => `${title}, ${date}`,
+    contents: 'Table of contents',
+    goToPage: (n: number) => `Go to page ${n}`,
   },
 } as const

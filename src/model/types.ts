@@ -113,6 +113,19 @@ export interface CustomSticker {
   createdAt: Millis
 }
 
+/* ---------- chapters ---------- */
+/**
+ * A chapter is a name and the page it opens on; it runs until the next one starts. The book's
+ * own name lives on the Entry (it is what the cover and the spine carry) — a chapter title is a
+ * different thing, and it is the one the page editor shows above the page.
+ */
+export interface Chapter {
+  id: Id
+  title: string
+  /** first page index of the chapter; the first chapter always starts at 0 */
+  start: number
+}
+
 /* ---------- entries ---------- */
 export interface EntryStats {
   pages: number
@@ -128,6 +141,8 @@ export interface Entry {
   updatedAt: Millis
   rev: number
   pages: Page[] // >= 1
+  /** the book's chapters, in page order; absent = one unnamed chapter over the whole book */
+  chapters?: Chapter[]
   cover: Cover
   stats: EntryStats
   lastOpenedPage?: number
@@ -142,6 +157,8 @@ export interface Settings {
   reduceMotion: 'system' | 'on'
   prompts: boolean
   snapToGrid: boolean
+  /** the page editor shows a spread — two pages side by side, both live — instead of one page */
+  twoPage: boolean
 }
 export const DEFAULT_SETTINGS: Settings = {
   theme: 'system',
@@ -151,6 +168,7 @@ export const DEFAULT_SETTINGS: Settings = {
   reduceMotion: 'system',
   prompts: true,
   snapToGrid: true,
+  twoPage: false,
 }
 
 /* ---------- storage ---------- */
@@ -190,11 +208,24 @@ export interface Handoff { rect: Rect; from: 'shelf' | 'book' }
  * front = cover outside, back = endpaper. Page index == pages.length is the ghost "Add a page".
  */
 export const spreadOfPage = (pageIndex: number) => Math.floor((pageIndex + 1) / 2)
+/**
+ * The two faces the page editor shows for spread `s`, in the order they sit on the desk. It is the
+ * book's own mapping with one difference: the left of the first spread is the front cover, because
+ * in the editor the cover is a page like any other and turning left from page 0 must reach it.
+ */
+export const editorFaces = (s: number): [number, number] => (s === 0 ? [COVER_PAGE, 0] : [2 * s - 1, 2 * s])
 /** Spreads including the one that carries the ghost 'Add a page' face (page index == pageCount). */
 export const spreadCount = (pageCount: number) => spreadOfPage(pageCount) + 1
 export const pagesOfSpread = (s: number): [number | null, number] => (s === 0 ? [null, 0] : [2 * s - 1, 2 * s])
 export const sheetOfPage = (pageIndex: number) => Math.floor(pageIndex / 2)
 
 /* ---------- misc ---------- */
-export interface Toast { id: number; message: string; undo?: () => void; ms: number }
+export interface Toast {
+  id: number
+  message: string
+  undo?: () => void
+  /** a named thing to do about it, when Undo is not the thing (e.g. Save journal) */
+  action?: { label: string; run: () => void }
+  ms: number
+}
 export interface FloatSpec { side: 'left' | 'right'; top: number; width: number; height: number; polygon: string }

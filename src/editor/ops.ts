@@ -5,6 +5,7 @@
  */
 import { nanoid } from '@/lib/ids'
 import { newPage } from '@/model/store'
+import { shiftChapters } from '@/model/contents'
 import {
   COVER_PAGE, CONTENT, DEFAULT_IMAGE_W, MIN_BLOCK, MIN_TEXT_W, PAGE_MARGIN, PITCH,
   type Block, type Entry, type Id, type ImageBlock, type Page, type StickerBlock, type StickerSource, type TextBlock, type TextKind,
@@ -137,7 +138,14 @@ export function addPageAfter(e: Entry, pi: number): { entry: Entry; index: numbe
   const pages = e.pages.slice()
   const index = Math.min(pages.length, pi + 1)
   pages.splice(index, 0, newPage())
-  return { entry: { ...e, pages }, index }
+  // the chapters after it keep the pages they opened on
+  return { entry: shiftChapters({ ...e, pages }, index, 1), index }
+}
+
+/** Drop a page and bring the chapter starts after it along. A book keeps at least one page. */
+export function removePage(e: Entry, pi: number): Entry {
+  if (e.pages.length <= 1 || pi < 0 || pi >= e.pages.length) return e
+  return shiftChapters({ ...e, pages: e.pages.filter((_, i) => i !== pi) }, pi + 1, -1)
 }
 
 /** Move `html` (already split off) into a fresh body block at the top of page `pi + 1`, creating the page if needed. */

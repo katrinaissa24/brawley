@@ -7,7 +7,7 @@
 import { memo, useEffect, useLayoutEffect, useRef } from 'react'
 import { DocumentView } from '@/editor/DocumentView'
 import { useImageUrl } from '@/lib/db'
-import type { Entry } from '@/model/types'
+import { COVER_PAGE, type Entry } from '@/model/types'
 import { S } from '@/copy/strings'
 import { CoverDesign } from './CoverDesign'
 import { Endpaper } from './Endpaper'
@@ -108,8 +108,17 @@ function PageFace({ side, pageIndex, entry, onOpenPage, onAddPage, onOptions, me
 function CoverFace({ entry, shadeRef }: { entry: Entry; shadeRef: React.RefObject<HTMLDivElement> }) {
   const img = useImageUrl(entry.cover.imageId, 'thumb')
   const title = entry.title.trim()
+  const ref = useRef<HTMLDivElement>(null)
+  // the cover is a page the editor can open (COVER_PAGE), so it registers a face like the rest and
+  // the editor flies back onto it when it closes
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (!el) return
+    bookRegistry.faces.set(COVER_PAGE, el)
+    return () => { if (bookRegistry.faces.get(COVER_PAGE) === el) bookRegistry.faces.delete(COVER_PAGE) }
+  }, [])
   return (
-    <div className="ob__face -front -cover">
+    <div ref={ref} className="ob__face -front -cover">
       {img && <img className="ob__coverImg" src={img} alt="" draggable={false} />}
       <div className="ob__coverSheen" />
       <div className={'ob__coverBand' + (title ? '' : ' -empty')}>{title || S.book.untitled}</div>

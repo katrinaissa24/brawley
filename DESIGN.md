@@ -16,12 +16,19 @@ Where this file and a spec disagree, **this file wins**.
 1. **Shelf** — every entry as a standing 3D book, side by side on a wooden shelf, scrolled horizontally.
    Hover pulls a book out and shows a label pill. Click opens it.
 2. **Book** — the opened book: a two-page spread with 3D page flips (drag, click the edge, arrow keys).
-   The left endpaper carries the title and date. Click the middle of a page to edit it.
+   The left endpaper carries the journal's name, its date and the **table of contents** — the chapters
+   and the entries written inside them (`src/book/Contents.tsx`; a row turns the book to its page).
+   Click the middle of a page to edit it.
 3. **Page** — the editor: the page grows (shared-element FLIP) into a dotted-grid document editor.
-   Esc goes one level back. Everything autosaves.
+   The journal's name stays in the top-left corner (the top bar's crumb, editable there); the title
+   above the page is the **chapter's**. Arrows turn the page either way through `[cover, 0 … n−1]` —
+   the front cover is the first face and is edited like any page — and past the last page the forward
+   arrow writes a new one. `settings.twoPage` opens a spread instead: two pages side by side, each
+   with its own session and gesture controller, both live; the chrome acts on the *active* face (the
+   one last written in or pressed). Esc goes one level back. Everything autosaves.
 
 Route state is in the store (`route`) and mirrored to the URL hash: `#/`, `#/b/<entryId>`,
-`#/b/<entryId>/p/<pageIndex>`.
+`#/b/<entryId>/p/<pageIndex>`, `#/b/<entryId>/cover`.
 
 ## 1. Non-negotiables
 
@@ -97,6 +104,13 @@ Each agent owns only its directory (plus the files listed). CSS classes are pref
 - Spread/sheet mapping is in types.ts (`spreadOfPage`, `pagesOfSpread`, `sheetOfPage`): spread 0 =
   [endpaper | page 0]; sheet k front = page 2k, back = page 2k+1; the cover is sheet −1
   (front = cover, back = endpaper); page index == pages.length is the ghost "Add a page".
+  `editorFaces(s)` is the same mapping for the page editor's spread, with one difference: the left of
+  spread 0 is `COVER_PAGE`, because there the cover is a page you can turn to and write on.
+- Chapters (`Entry.chapters`) are a title and the page they open on; they run until the next one starts,
+  and the first always starts at page 0. Entries are not stored at all: a page whose topmost Title block
+  has text opens one, and the pages after it belong to it until the next title. `src/model/contents.ts`
+  reads both back (`chaptersOf`, `entriesOf`, `contentsOf`) and owns the edits (`setChapterTitle`,
+  `startChapterAt`, `removeChapterAt`, `shiftChapters` — page inserts and removals bring the starts along).
 - Open book pages: `PAGE_W = min(42vw, 480px)`, aspect 816:1152; `--page-scale = PAGE_W / 816`.
 
 ## 4. Store contract (frozen — `src/model/store.ts`)
@@ -114,7 +128,8 @@ Each agent owns only its directory (plus the files listed). CSS classes are pref
 - `undo()`, `redo()`, `canUndo`, `canRedo` (per currently open entry).
 - Editor UI (not undoable): `selection: Id[]`, `select(ids)`, `editingBlockId`, `scale`.
 - `saveState: 'idle'|'pending'|'saving'|'saved'|'failed'`, `flushSave()`.
-- `toast(msg, {undo?: () => void, ms?})`, `toasts`, `dismissToast(id)`.
+- `toast(msg, {undo?: () => void, action?: {label, run}, ms?})`, `toasts`, `dismissToast(id)`. Every
+  notice is a toast: the app never opens a browser dialog (no `alert`/`confirm`/`prompt`/`beforeunload`).
 - `searchQuery`, `setSearch(q)`, `searchMatches: Set<Id>` (title + page text, debounced in the chrome).
 - `journal: JournalStatus`, `setJournal(j)` — where the journal lives (§5b); `front`, `setFront(on)` — the
   front page shown over the app on request. `load()` flushes pending saves before it reads, so a re-read

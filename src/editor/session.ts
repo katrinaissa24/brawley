@@ -22,6 +22,7 @@ export type SessionEvent =
   | 'import' // (files: File[], near?: Id) files pasted into a text block
   | 'focus' // (id) a block wants the caret
   | 'blocksChanged' // () a block mounted/unmounted
+  | 'link' // (id, anchor: Rect | null) a selection is waiting for a link address
 type Listener = (...args: any[]) => void
 
 export class EditorSession {
@@ -34,6 +35,8 @@ export class EditorSession {
   readonly flushers = new Map<Id, () => void>()
   readonly wrapFns = new Map<Id, (live?: LiveRects) => void>()
   readonly formatFns = new Map<Id, (cmd: FormatCmd) => void>()
+  /** per block: wrap the saved selection in a link. Fed by the editor's own address field. */
+  readonly linkFns = new Map<Id, (url: string) => void>()
   /** ids added by this session that should pop in on mount */
   readonly justAdded = new Set<Id>()
   root: HTMLElement | null = null
@@ -45,6 +48,8 @@ export class EditorSession {
   badgeEl: HTMLElement | null = null
   controller: GestureController | null = null
   pendingFocus: { id: Id; where: 'start' | 'end' } | null = null
+  /** the selection a field took the focus away from, so a link can still be put around it */
+  savedRange: Range | null = null
   gesture = false
   /** true once the first paint of the page is done (entrances only after that) */
   mounted = false
@@ -111,5 +116,7 @@ export class EditorSession {
     this.flushers.clear()
     this.wrapFns.clear()
     this.formatFns.clear()
+    this.linkFns.clear()
+    this.savedRange = null
   }
 }

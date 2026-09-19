@@ -1,10 +1,15 @@
-/** The inside of the front cover: title (click to edit page 0) and date (click opens the date picker). */
+/**
+ * The inside of the front cover: the journal's name (click to edit page 0), its date (click opens
+ * the date picker) and, under them, the table of contents — the chapters and the entries written
+ * inside them, which is what the beginning of a book is for.
+ */
 import { useStore } from '@/model/store'
 import type { Entry } from '@/model/types'
 import { S } from '@/copy/strings'
 import { formatLong } from '@/lib/dates'
 import { flip } from './flip'
 import { bookRegistry } from './registry'
+import { Contents } from './Contents'
 
 export function Endpaper({ entry }: { entry: Entry }) {
   const title = entry.title.trim()
@@ -38,6 +43,7 @@ export function Endpaper({ entry }: { entry: Entry }) {
       >
         {formatLong(entry.date)}
       </button>
+      <Contents entry={entry} />
     </div>
   )
 }

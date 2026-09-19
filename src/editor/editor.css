@@ -503,7 +503,7 @@
   right: 0;
   height: 48px;
   display: grid;
-  grid-template-columns: 1fr auto 1fr;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   padding: 0 16px;
   pointer-events: none;
@@ -515,61 +515,82 @@
   to { opacity: 1; transform: none; }
 }
 .ed-header > * { pointer-events: auto; }
-.ed-back {
-  justify-self: start;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  height: 30px;
-  padding: 0 10px 0 6px;
-  border-radius: 999px;
-  color: var(--muted);
-  font: 500 13px/1 var(--ui);
-  transition: color 120ms var(--ease-out), background-color 120ms var(--ease-out);
-}
-.ed-back:hover { color: var(--fg); background: var(--sel); }
-.ed-header__centre {
+/* the way back and the journal's name live in the top bar above this one (src/ui/TopBar.tsx) */
+
+/* ---------- the chapter, written above the page ---------- */
+.ed-chapterbar {
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 1px;
-  min-width: 0;
-  max-width: min(60vw, 720px);
+  max-width: 100%;
+  animation: ed-chrome-in 200ms var(--ease-out) 380ms both;
 }
-.ed-title {
-  width: min(60vw, 560px);
-  height: 26px;
-  padding: 0 8px;
+.ed.is-closing .ed-chapterbar { animation: ed-fade-out 120ms var(--ease-out) both; }
+.ed-chapter {
+  width: min(70vw, 560px);
+  height: 34px;
+  padding: 0 10px;
   border: 0;
-  border-radius: 6px;
+  border-radius: 7px;
   background: transparent;
   text-align: center;
-  font: 600 17px/1.2 var(--serif);
-  letter-spacing: -0.01em;
+  font: 700 23px/1.3 var(--serif);
+  letter-spacing: -0.012em;
   color: var(--fg);
   outline: none;
   transition: background-color 120ms var(--ease-out);
 }
-.ed-title::placeholder { color: var(--faint); font-weight: 600; }
-.ed-title:hover { background: var(--chrome); }
-.ed-title:focus { background: var(--sel); }
-.ed-title:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.ed-chapter::placeholder { color: var(--faint); font-weight: 400; font-style: italic; }
+.ed-chapter:hover { background: var(--chrome); }
+.ed-chapter:focus { background: var(--sel); }
+.ed-chapter:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.ed-chapterbar__row { display: flex; align-items: center; gap: 2px; }
 .ed-date {
-  height: 18px;
+  height: 20px;
   padding: 0 6px;
   border-radius: 999px;
   color: var(--muted);
-  font: italic 13px/1 var(--serif);
+  font: italic 13.5px/1 var(--serif);
   transition: color 120ms var(--ease-out), background-color 120ms var(--ease-out);
 }
 .ed-date:hover { color: var(--fg); background: var(--sel); }
 .ed-date:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* where a chapter starts: shown on hover of the bar, and always once this page opens one */
+.ed-chapterbreak {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 20px;
+  border-radius: 6px;
+  color: var(--faint);
+  opacity: 0;
+  transition: opacity 140ms var(--ease-out), color 120ms var(--ease-out), background-color 120ms var(--ease-out);
+}
+.ed-chapterbar:hover .ed-chapterbreak, .ed-chapterbreak:focus-visible { opacity: 1; }
+.ed-chapterbreak[data-on] { opacity: 1; color: var(--accent); }
+.ed-chapterbreak:hover { color: var(--fg); background: var(--sel); }
+.ed-chapterbreak:disabled { opacity: 0; pointer-events: none; }
+.ed-chapterbreak:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .ed-header__right {
   justify-self: end;
   display: flex;
   align-items: center;
   gap: 10px;
 }
+/* one page, or two side by side */
+.ed-layout {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 26px;
+  border-radius: 7px;
+  color: var(--muted);
+  transition: color 120ms var(--ease-out), background-color 120ms var(--ease-out);
+}
+.ed-layout:hover { color: var(--fg); background: var(--sel); }
+.ed-layout[aria-pressed="true"] { color: var(--fg); }
+.ed-layout:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .ed-pageno {
   height: 26px;
   padding: 0 10px;
@@ -615,22 +636,46 @@
   bottom: 0;
   overflow: auto;
   display: flex;
-  padding: 8px 48px 40px;
+  padding: 4px 64px 32px;
   scrollbar-width: thin;
+}
+.ed-spread {
+  margin: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
 }
 .ed-stage {
   position: relative;
   flex: none;
-  margin: auto;
 }
+.ed-pages { position: absolute; inset: 0; display: flex; align-items: flex-start; }
 .ed-page {
-  position: absolute;
-  inset: 0;
+  position: relative;
+  flex: none;
   background: var(--paper);
   border-radius: 2px;
   box-shadow: var(--ed-page-shadow);
   transform-origin: 0 0;
 }
+/* in a spread, the page the caret is on keeps the light; the other one waits a shade back */
+.ed-stage[data-two] .ed-page { transition: opacity 160ms var(--ease-out); }
+.ed-stage[data-two] .ed-page:not([data-active]) { opacity: 0.94; }
+/* the page after the last one: write it by asking */
+.ed-addface {
+  position: relative;
+  flex: none;
+  border-radius: 2px;
+  border: 1.5px dashed var(--faint);
+  color: var(--muted);
+  font: 500 13px/1 var(--ui);
+  display: grid;
+  place-items: center;
+  transition: border-color 140ms var(--ease-out), color 140ms var(--ease-out), background-color 140ms var(--ease-out);
+}
+.ed-addface:hover { border-color: var(--accent); color: var(--fg); background: color-mix(in srgb, var(--paper) 55%, transparent); }
+.ed-addface:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 .ed-page[data-cover] { background: var(--cover-hex); }
 .ed-page[data-cover] .ed-dots { opacity: 0.35; }
 .ed-coverbg { position: absolute; left: 0; top: 0; width: 816px; height: 1152px; overflow: hidden; pointer-events: none; }
@@ -651,6 +696,58 @@
   height: 1152px;
   transform-origin: 0 0;
 }
+/* ---------- turning pages: the cover is the face before page one ---------- */
+.ed-arrow {
+  position: absolute;
+  top: 50%;
+  z-index: 30;
+  width: 40px;
+  height: 40px;
+  margin-top: -20px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--paper) 92%, transparent);
+  box-shadow: 0 1px 2px rgba(var(--shadow-ink), 0.06), 0 4px 14px -4px rgba(var(--shadow-ink), 0.25), inset 0 0 0 1px var(--rule);
+  opacity: 0.8;
+  animation: ed-chrome-in 200ms var(--ease-out) 420ms both;
+  transition: opacity 160ms var(--ease-out), color 120ms var(--ease-out), background-color 120ms var(--ease-out), transform 120ms var(--ease-out);
+}
+.ed-arrow.-back { left: 14px; }
+.ed-arrow.-fwd { right: 14px; }
+.ed-arrow:hover { opacity: 1; color: var(--fg); background: var(--paper); }
+.ed-arrow:active { transform: scale(0.94); }
+.ed-arrow[hidden] { display: none; }
+.ed-arrow svg { width: 16px; height: 16px; }
+.ed-arrow:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.ed.is-closing .ed-arrow { animation: ed-fade-out 120ms var(--ease-out) both; }
+
+/* the link address, asked for on the page instead of in a browser dialog */
+.ed-linkfield { border-radius: 10px; gap: 4px; padding: 5px; }
+.ed-linkfield input {
+  width: 214px;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--rule);
+  border-radius: 7px;
+  background: var(--paper);
+  color: var(--fg);
+  font: 13px/1 var(--ui);
+  outline: none;
+}
+.ed-linkfield input:focus { border-color: var(--accent); }
+.ed-linkfield__go {
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 7px;
+  color: var(--fg);
+  font: 500 12.5px/1 var(--ui);
+  transition: background-color 120ms var(--ease-out), color 120ms var(--ease-out);
+}
+.ed-linkfield__go:hover:not(:disabled) { background: var(--sel); color: var(--accent); }
+.ed-linkfield__go:disabled { color: var(--faint); cursor: default; }
+
 .ed-rail-slot { position: absolute; inset: 0; pointer-events: none; }
 .ed-rail-slot > * { pointer-events: auto; }
 .ed-rail-slot .ed-rail { animation-delay: 380ms; }
