@@ -1,9 +1,10 @@
 /**
- * PageEditor — surface 3. A fixed overlay above the book with an opaque paper backdrop, a slim
- * header (the journal's own name in the top-left corner beside the way back, the autosave dot,
- * the layout toggle and the page number), the chapter the open page belongs to written above the
- * page, and the page itself: an UNSCALED box `[data-editor-page]` (registered with
- * setEditorPageEl for the book's FLIP) whose inner layer is scaled to fit (Cmd+0 / − / = zoom).
+ * PageEditor — surface 3. A fixed overlay above the book with an opaque paper backdrop, the
+ * journal's own name in the top-left corner beside the way back, the chapter the open page belongs
+ * to written above the page, a quiet strip in the bottom-right corner (the layout toggle, the zoom
+ * reading, the autosave dot and the page number), and the page itself: an UNSCALED box
+ * `[data-editor-page]` (registered with setEditorPageEl for the book's FLIP) whose inner layer is
+ * scaled to fit — Cmd+0 / − / = and a two-finger pinch on the trackpad grow and shrink it.
  *
  * Two things the pages are read as: the book's front cover is the first face you can turn to and
  * is edited like any other page, and the layout toggle opens a spread — two pages side by side,
@@ -33,7 +34,7 @@ import { DocumentView } from './DocumentView'
 import { ImageToolbar } from './ImageToolbar'
 import { InsertRail } from './InsertRail'
 import { splitAtOverflow } from './blocks/TextBody'
-import { selectionRect } from './caret'
+import { caretEdges, selectionRect } from './caret'
 import { addBlock, addPageAfter, pageOf, continueOnNextPage, firstFreeRow, newStickerBlock, newTextBlock, readingOrder, textBlocks, updateBlock } from './ops'
 import { sanitizeHtml } from './sanitize'
 import { EditorSession } from './session'
@@ -43,17 +44,23 @@ import { useImageImport, type PendingImage } from './useImageImport'
 import './editor.css'
 
 const ZOOM_MIN = 0.5
-const ZOOM_MAX = 1.25
+/** how far a pinch or Cmd+= may push the page; fitting it to the window stops at FIT_MAX */
+const ZOOM_MAX = 2
+const FIT_MAX = 1.25
 const ZOOM_STEP = 0.1
 /** the gutter between the two pages of a spread, in unscaled page px */
 const GUTTER = 28
 
+/** a spread may shrink further than a single page before it stops */
+const zoomFloor = (faces: number) => (faces > 1 ? 0.3 : ZOOM_MIN)
+const clampZoom = (v: number, faces: number) => Math.min(ZOOM_MAX, Math.max(zoomFloor(faces), v))
 const fitScale = (faces: number) => {
-  const floor = faces > 1 ? 0.3 : ZOOM_MIN
   const w = (window.innerWidth - 120 - (faces - 1) * GUTTER) / (PAGE.w * faces)
-  const h = (window.innerHeight - 196) / PAGE.h
-  return Math.min(ZOOM_MAX, Math.max(floor, Math.min(w, h)))
+  const h = (window.innerHeight - 176) / PAGE.h
+  return Math.min(FIT_MAX, Math.max(zoomFloor(faces), Math.min(w, h)))
 }
+/** Safari sends a trackpad pinch as gesture events of its own (not in lib.dom); `scale` is cumulative. */
+interface GestureLikeEvent extends Event { scale: number; clientX: number; clientY: number }
 const toRect = (r: DOMRect): Rect => ({ x: r.left, y: r.top, w: r.width, h: r.height })
 /** The journal's name is written in the top bar (src/ui owns it); a new book asks for it there. */
 const focusBookName = () => document.querySelector<HTMLInputElement>('[data-book-name]')?.focus({ preventScroll: true })
@@ -115,6 +122,8 @@ function Editor({ entry, pageIndex, routeIndex }: { entry: Entry; pageIndex: num
   const session = live.includes(activeIndex) ? sessionFor(activeIndex) : sessions[sessions.length - 1]
   const sessionRef = useRef(session)
   sessionRef.current = session
+  const sessionsRef = useRef(sessions)
+  sessionsRef.current = sessions
   const activate = useCallback((i: number) => setActivePage(p => (p === i ? p : i)), [])
   useEffect(() => { setActivePage(pageIndex) }, [pageIndex])
 
@@ -123,6 +132,7 @@ function Editor({ entry, pageIndex, routeIndex }: { entry: Entry; pageIndex: num
   const blocks = page.blocks
 
   const [scale, setScale] = useState(() => fitScale(faces.length))
+  const [fit, setFit] = useState(() => fitScale(faces.length))
   const userZoom = useRef(false)
   const [gesture, setGesture] = useState(false)
   const [bubble, setBubble] = useState<{ anchor: Rect; id: Id } | null>(null)
@@ -133,7 +143,10 @@ function Editor({ entry, pageIndex, routeIndex }: { entry: Entry; pageIndex: num
   const [closing, setClosing] = useState(false)
   const [words, setWords] = useState(false)
 
+  /** a turn asked for by the arrows (keys or buttons) is browsing: the caret stays out of the new page */
+  const browsing = useRef(false)
   const rootRef = useRef<HTMLDivElement>(null)
+  const scrollRef = useRef<HTMLDivElement>(null)
   const stageRef = useRef<HTMLDivElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   const chapterRef = useRef<HTMLInputElement>(null)
@@ -151,20 +164,94 @@ function Editor({ entry, pageIndex, routeIndex }: { entry: Entry; pageIndex: num
     if (routeIndex !== pageIndex) useStore.getState().openPage(entry.id, pageIndex)
   }, [routeIndex, pageIndex, entry.id])
 
-  /* ---------- zoom ---------- */
+  /* ---------- zoom ----------
+   * pinchAt remembers where on the stage a pinch's fingers were, so the layout effect below can
+   * scroll that same point back under them once the new scale has painted.
+   */
+  const pinchAt = useRef<{ x: number; y: number; fx: number; fy: number } | null>(null)
   useEffect(() => { useStore.getState().setScale(scale) }, [scale])
   useEffect(() => {
-    const on = () => { if (!userZoom.current) setScale(fitScale(faces.length)) }
+    const on = () => {
+      const f = fitScale(faces.length)
+      setFit(f)
+      if (!userZoom.current) setScale(f)
+    }
     on()
     window.addEventListener('resize', on)
     return () => window.removeEventListener('resize', on)
   }, [faces.length])
   const zoom = useCallback((d: 1 | -1 | 'fit') => {
     for (const s of sessions) s.flushAll()
+    pinchAt.current = null
     if (d === 'fit') { userZoom.current = false; setScale(fitScale(faces.length)); return }
     userZoom.current = true
-    setScale(s => Math.min(ZOOM_MAX, Math.max(faces.length > 1 ? 0.3 : ZOOM_MIN, Math.round((s + d * ZOOM_STEP) * 100) / 100)))
+    setScale(s => clampZoom(Math.round((s + d * ZOOM_STEP) * 100) / 100, faces.length))
   }, [sessions, faces.length])
+
+  /* ---------- pinch: two fingers on the trackpad grow the page around the point under them ----------
+   * Chromium and Firefox send a pinch as ctrl+wheel, Safari as gesture events of its own; both are
+   * coalesced to one scale change per frame.
+   */
+  const zoomBy = useCallback((factor: number, x: number, y: number) => {
+    const r = stageRef.current?.getBoundingClientRect()
+    pinchAt.current = r && r.width && r.height ? { x, y, fx: (x - r.left) / r.width, fy: (y - r.top) / r.height } : null
+    userZoom.current = true
+    setScale(s => clampZoom(s * factor, faces.length))
+  }, [faces.length])
+  useLayoutEffect(() => {
+    const at = pinchAt.current
+    pinchAt.current = null
+    const sc = scrollRef.current
+    const r = stageRef.current?.getBoundingClientRect()
+    if (!at || !sc || !r) return
+    sc.scrollLeft += r.left + at.fx * r.width - at.x
+    sc.scrollTop += r.top + at.fy * r.height - at.y
+  }, [scale])
+  useEffect(() => {
+    const root = rootRef.current
+    if (!root) return
+    let raf = 0
+    let acc = 1
+    let at = { x: 0, y: 0 }
+    let last = 0
+    const apply = () => { raf = 0; const f = acc; acc = 1; zoomBy(f, at.x, at.y) }
+    const step = (factor: number, x: number, y: number) => {
+      const now = performance.now()
+      if (now - last > 300) for (const s of sessionsRef.current) s.flushAll() // the first pinch of a burst
+      last = now
+      acc *= factor
+      at = { x, y }
+      if (!raf) raf = requestAnimationFrame(apply)
+    }
+    const onWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey) return // a plain two-finger scroll still scrolls
+      if ((e.target as HTMLElement | null)?.closest?.('[data-crop]')) return // reframing a picture owns the wheel there
+      e.preventDefault()
+      const d = Math.max(-50, Math.min(50, e.deltaY * (e.deltaMode === 0 ? 1 : 20))) // lines/pages → px
+      step(Math.exp(-d * 0.01), e.clientX, e.clientY)
+    }
+    let base = 1
+    const onGestureStart = (e: Event) => { e.preventDefault(); base = (e as GestureLikeEvent).scale || 1 }
+    const onGestureChange = (e: Event) => {
+      e.preventDefault()
+      const g = e as GestureLikeEvent
+      const s = g.scale || 1
+      step(base > 0 ? s / base : 1, g.clientX, g.clientY)
+      base = s
+    }
+    const onGestureEnd = (e: Event) => e.preventDefault()
+    root.addEventListener('wheel', onWheel, { passive: false })
+    root.addEventListener('gesturestart', onGestureStart)
+    root.addEventListener('gesturechange', onGestureChange)
+    root.addEventListener('gestureend', onGestureEnd)
+    return () => {
+      cancelAnimationFrame(raf)
+      root.removeEventListener('wheel', onWheel)
+      root.removeEventListener('gesturestart', onGestureStart)
+      root.removeEventListener('gesturechange', onGestureChange)
+      root.removeEventListener('gestureend', onGestureEnd)
+    }
+  }, [zoomBy])
 
   /* ---------- gesture / overflow / replace / import / link events, on every open face ---------- */
   useEffect(() => {
@@ -208,13 +295,17 @@ function Editor({ entry, pageIndex, routeIndex }: { entry: Entry; pageIndex: num
       const p = e && pageOf(e, pageIndex)
       if (!e || !p) return
       const texts = readingOrder(textBlocks(p.blocks))
+      const browse = browsing.current
+      browsing.current = false
       if (!p.blocks.length) {
         const nb = newTextBlock('body', PAGE_MARGIN, PAGE_MARGIN, CONTENT.cols)
         s.commit(en => addBlock(en, pageIndex, nb), { silent: true })
+        if (browse) return // turned here with the arrows: the next arrow turns again
         if (!e.title && pageIndex === 0) focusBookName()
         else s.focus(nb.id, 'start')
         return
       }
+      if (browse) return
       if (!e.title && pageIndex === 0) { focusBookName(); return }
       const last = texts[texts.length - 1]
       if (last) s.focus(last.id, 'end')
@@ -287,14 +378,16 @@ function Editor({ entry, pageIndex, routeIndex }: { entry: Entry; pageIndex: num
     useStore.getState().openPage(entry.id, r.index)
     useStore.getState().toast(S.editor.pageAdded)
   }, [sessions, pool, activeIndex, entry])
-  const go = useCallback((d: -1 | 1) => {
+  const go = useCallback((d: -1 | 1, browse = false) => {
     if (d === -1) {
       if (!canBack) return
+      browsing.current = browse
       if (twoPage) { const [l] = editorFaces(spreadOfPage(pageIndex) - 1); goTo(l, -1); return }
       goTo(pageIndex === 0 ? COVER_PAGE : pageIndex - 1, -1)
       return
     }
-    if (atEnd) { addPage(pageCount - 1); return }
+    if (atEnd) { addPage(pageCount - 1); return } // a page written on the way past the last one is written in, not browsed
+    browsing.current = browse
     if (twoPage) { const [l] = editorFaces(spreadOfPage(pageIndex) + 1); goTo(l, 1); return }
     goTo(pageIndex === COVER_PAGE ? 0 : pageIndex + 1, 1)
   }, [canBack, atEnd, twoPage, pageIndex, pageCount, goTo, addPage])
@@ -367,10 +460,34 @@ function Editor({ entry, pageIndex, routeIndex }: { entry: Entry; pageIndex: num
           return
         }
       }
+      const k = e.key
+      /* ← / → turn the page: whenever nothing on the page is selected or being written in, and from
+       * inside the writing when the caret has nowhere left to go — the far edge of the page's first
+       * or last text. Anywhere else in a text they are the caret's, and with a block selected the
+       * arrows nudge it. */
+      if ((k === 'ArrowLeft' || k === 'ArrowRight') && !meta && !e.shiftKey && !e.altKey && !st.popover) {
+        const back = k === 'ArrowLeft'
+        const ed = inEditable ? t?.closest<HTMLElement>('.ed-text[contenteditable="true"]') ?? null : null
+        let turn = !inEditable && !st.selection.length
+        if (ed && rootRef.current?.contains(ed)) {
+          const edges = caretEdges(ed)
+          const id = ed.closest<HTMLElement>('[data-id]')?.dataset.id
+          const face = ed.closest<HTMLElement>('.ed-doc')?.dataset.page
+          const facePage = face !== undefined ? pool.get(Number(face))?.page() : undefined
+          const order = facePage ? readingOrder(textBlocks(facePage.blocks)) : []
+          const edge = back ? order[0] : order[order.length - 1]
+          turn = !!edges && !!id && id === edge?.id && (back ? edges.start : edges.end)
+        }
+        if (turn) {
+          if (back ? !canBack : atEnd) return // the cover is the first face; a page after the last is asked for, never turned into
+          e.preventDefault()
+          go(back ? -1 : 1, true)
+          return
+        }
+      }
       if (inEditable || st.popover) return
       const ctl = session.controller
       if (!ctl || !st.selection.length) return
-      const k = e.key
       if (k === 'ArrowLeft' || k === 'ArrowRight' || k === 'ArrowUp' || k === 'ArrowDown') {
         e.preventDefault()
         ctl.nudge(k === 'ArrowLeft' ? -1 : k === 'ArrowRight' ? 1 : 0, k === 'ArrowUp' ? -1 : k === 'ArrowDown' ? 1 : 0, e.shiftKey)
@@ -386,7 +503,7 @@ function Editor({ entry, pageIndex, routeIndex }: { entry: Entry; pageIndex: num
     }
     window.addEventListener('keydown', onKey, { capture: true })
     return () => window.removeEventListener('keydown', onKey, { capture: true })
-  }, [session, go, addPage, zoom, close, openStickerPicker, addSticker])
+  }, [session, pool, go, addPage, zoom, close, openStickerPicker, addSticker, canBack, atEnd])
 
   /* ---------- paste onto the page (nothing focused) ---------- */
   useEffect(() => {
@@ -654,39 +771,7 @@ function Editor({ entry, pageIndex, routeIndex }: { entry: Entry; pageIndex: num
     >
       <div className="ed-backdrop" data-ed-backdrop aria-hidden="true" />
 
-      <header className="ed-header">
-        <div className="ed-header__left" aria-hidden="true" />
-        <div className="ed-header__right">
-          <button
-            type="button"
-            className="ed-layout"
-            aria-label={E.a11y.layout}
-            aria-pressed={twoPage}
-            title={twoPage ? E.layout.one : E.layout.two}
-            onClick={() => { userZoom.current = false; useStore.getState().setSettings({ twoPage: !twoPage }) }}
-          >
-            <svg viewBox="0 0 20 16" width="20" height="16" fill="none" stroke="currentColor" strokeWidth={1.4} aria-hidden="true">
-              <rect x="1.7" y="1.7" width="7.6" height="12.6" rx="1" />
-              {twoPage && <rect x="10.7" y="1.7" width="7.6" height="12.6" rx="1" />}
-            </svg>
-          </button>
-          <SaveDot state={saveState} />
-          <button
-            type="button"
-            className={'ed-pageno' + (words ? ' is-words' : '')}
-            aria-label={words ? E.a11y.wordCount : pageLabel}
-            onPointerDown={pressStart}
-            onPointerUp={pressEnd}
-            onPointerLeave={pressEnd}
-            onPointerCancel={pressEnd}
-            onContextMenu={e => e.preventDefault()}
-          >
-            {words ? E.words(n, Math.ceil(n / 200)) : pageLabel}
-          </button>
-        </div>
-      </header>
-
-      <div className="ed-scroll">
+      <div className="ed-scroll" ref={scrollRef}>
         <div className="ed-spread">
           <div className="ed-chapterbar">
             <input
@@ -772,10 +857,44 @@ function Editor({ entry, pageIndex, routeIndex }: { entry: Entry; pageIndex: num
         </div>
       </div>
 
-      <button type="button" className="ed-arrow -back" hidden={!canBack} aria-label={E.prevPage} title={E.prevPage} onClick={() => go(-1)}>
+      <footer className="ed-footer">
+        <button
+          type="button"
+          className="ed-layout"
+          aria-label={E.a11y.layout}
+          aria-pressed={twoPage}
+          title={twoPage ? E.layout.one : E.layout.two}
+          onClick={() => { userZoom.current = false; useStore.getState().setSettings({ twoPage: !twoPage }) }}
+        >
+          <svg viewBox="0 0 20 16" width="20" height="16" fill="none" stroke="currentColor" strokeWidth={1.4} aria-hidden="true">
+            <rect x="1.7" y="1.7" width="7.6" height="12.6" rx="1" />
+            {twoPage && <rect x="10.7" y="1.7" width="7.6" height="12.6" rx="1" />}
+          </svg>
+        </button>
+        {Math.abs(scale - fit) > 0.005 && (
+          <button type="button" className="ed-zoom" aria-label={E.zoom.fit} title={E.zoom.hint} onClick={() => zoom('fit')}>
+            {E.zoom.level(Math.round(scale * 100))}
+          </button>
+        )}
+        <SaveDot state={saveState} />
+        <button
+          type="button"
+          className={'ed-pageno' + (words ? ' is-words' : '')}
+          aria-label={words ? E.a11y.wordCount : pageLabel}
+          onPointerDown={pressStart}
+          onPointerUp={pressEnd}
+          onPointerLeave={pressEnd}
+          onPointerCancel={pressEnd}
+          onContextMenu={e => e.preventDefault()}
+        >
+          {words ? E.words(n, Math.ceil(n / 200)) : pageLabel}
+        </button>
+      </footer>
+
+      <button type="button" className="ed-arrow -back" hidden={!canBack} aria-label={E.prevPage} title={E.prevPage} onClick={() => go(-1, true)}>
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M10 3 5 8l5 5" /></svg>
       </button>
-      <button type="button" className="ed-arrow -fwd" aria-label={atEnd ? E.addPage : E.nextPage} title={atEnd ? E.addPage : E.nextPage} onClick={() => go(1)}>
+      <button type="button" className="ed-arrow -fwd" aria-label={atEnd ? E.addPage : E.nextPage} title={atEnd ? E.addPage : E.nextPage} onClick={() => go(1, true)}>
         {atEnd
           ? <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" aria-hidden="true"><path d="M8 3.5v9M3.5 8h9" /></svg>
           : <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m6 3 5 5-5 5" /></svg>}

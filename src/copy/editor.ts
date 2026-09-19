@@ -83,7 +83,8 @@ export const editor = {
     add: 'Add link',
     cancel: 'Cancel',
   },
-  zoom: { fit: 'Fit to window', in: 'Zoom in', out: 'Zoom out' },
+  /** hint + level are the corner strip's reading, written only once the page is zoomed off its fitted size */
+  zoom: { fit: 'Fit to window', in: 'Zoom in', out: 'Zoom out', hint: 'Fit to window · ⌘0', level: (pct: number) => `${pct}%` },
   size: (w: number, h: number) => `${w} × ${h}`,
   rotation: (deg: number) => `${Math.round(deg)}°`,
   a11y: {

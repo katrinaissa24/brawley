@@ -101,6 +101,26 @@ export function placeCaret(root: HTMLElement, where: 'start' | 'end') {
   sel.addRange(r)
 }
 
+/**
+ * Whether a collapsed caret sits at the very start / very end of the editable's content (both, in an
+ * empty block); null when the selection is not a caret inside `root`. A lone trailing <br> — the one
+ * the browser keeps to hold an empty last line open — does not count as content after the caret.
+ */
+export function caretEdges(root: HTMLElement): { start: boolean; end: boolean } | null {
+  const sel = window.getSelection()
+  if (!sel || !sel.rangeCount || !sel.isCollapsed) return null
+  const r = sel.getRangeAt(0)
+  if (!root.contains(r.startContainer)) return null
+  const before = document.createRange()
+  before.selectNodeContents(root)
+  before.setEnd(r.startContainer, r.startOffset)
+  const after = document.createRange()
+  after.selectNodeContents(root)
+  after.setStart(r.startContainer, r.startOffset)
+  const tail = textLength(after)
+  return { start: textLength(before) === 0, end: tail === 0 || (tail === 1 && !after.toString()) }
+}
+
 /** Viewport rect of the current selection (collapsed carets included); null when there is none. */
 export function selectionRect(): DOMRect | null {
   const sel = window.getSelection()

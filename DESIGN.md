@@ -25,7 +25,10 @@ Where this file and a spec disagree, **this file wins**.
    the front cover is the first face and is edited like any page — and past the last page the forward
    arrow writes a new one. `settings.twoPage` opens a spread instead: two pages side by side, each
    with its own session and gesture controller, both live; the chrome acts on the *active* face (the
-   one last written in or pressed). Esc goes one level back. Everything autosaves.
+   one last written in or pressed). The layout toggle, the autosave dot and the page number sit in a
+   strip in the bottom-right corner. ← / → turn the page whenever the caret is not in the writing,
+   and from the far edge of the page's first / last text; a two-finger pinch on the trackpad zooms
+   the page (Cmd+0 fits it back). Esc goes one level back. Everything autosaves.
 
 Route state is in the store (`route`) and mirrored to the URL hash: `#/`, `#/b/<entryId>`,
 `#/b/<entryId>/p/<pageIndex>`, `#/b/<entryId>/cover`.

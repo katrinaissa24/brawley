@@ -494,28 +494,18 @@
 @keyframes ed-fade { from { opacity: 0; } to { opacity: 1; } }
 @keyframes ed-fade-out { from { opacity: 1; } to { opacity: 0; } }
 
-/* ---------- header (sits under the 44px top bar) ---------- */
+/* the way back and the journal's name live in the 44px top bar above the editor (src/ui/TopBar.tsx) */
 
-.ed-header {
-  position: absolute;
-  top: 44px;
-  left: 0;
-  right: 0;
-  height: 48px;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  padding: 0 16px;
-  pointer-events: none;
-  animation: ed-chrome-in 200ms var(--ease-out) 380ms both;
-}
-.ed.is-closing .ed-header, .ed.is-closing .ed-rail-slot, .ed.is-closing .ed-overflow { animation: ed-fade-out 120ms var(--ease-out) both; }
+.ed.is-closing .ed-footer, .ed.is-closing .ed-rail-slot, .ed.is-closing .ed-overflow { animation: ed-fade-out 120ms var(--ease-out) both; }
 @keyframes ed-chrome-in {
   from { opacity: 0; transform: translateY(-6px); }
   to { opacity: 1; transform: none; }
 }
-.ed-header > * { pointer-events: auto; }
-/* the way back and the journal's name live in the top bar above this one (src/ui/TopBar.tsx) */
+/* the corner strip comes up from the foot of the window instead */
+@keyframes ed-chrome-up {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
 
 /* ---------- the chapter, written above the page ---------- */
 .ed-chapterbar {
@@ -572,11 +562,20 @@
 .ed-chapterbreak:hover { color: var(--fg); background: var(--sel); }
 .ed-chapterbreak:disabled { opacity: 0; pointer-events: none; }
 .ed-chapterbreak:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.ed-header__right {
-  justify-self: end;
+/* ---------- the strip in the bottom-right corner: layout, zoom, autosave, page number ---------- */
+.ed-footer {
+  position: absolute;
+  right: 16px;
+  bottom: 10px;
+  z-index: 30;
   display: flex;
   align-items: center;
   gap: 10px;
+  height: 32px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--bg);
+  animation: ed-chrome-up 200ms var(--ease-out) 380ms both;
 }
 /* one page, or two side by side */
 .ed-layout {
@@ -604,6 +603,18 @@
   touch-action: none;
   transition: color 120ms var(--ease-out), background-color 120ms var(--ease-out);
 }
+.ed-zoom {
+  height: 26px;
+  padding: 0 9px;
+  border-radius: 999px;
+  color: var(--muted);
+  font: 500 12px/1 var(--ui);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  transition: color 120ms var(--ease-out), background-color 120ms var(--ease-out);
+}
+.ed-zoom:hover { color: var(--fg); background: var(--sel); }
+.ed-zoom:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .ed-pageno:hover { color: var(--fg); background: var(--sel); }
 .ed-pageno.is-words { color: var(--fg); background: var(--sel); font-style: italic; font-family: var(--serif); font-size: 13px; }
 .ed-pageno:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
@@ -630,13 +641,13 @@
 
 .ed-scroll {
   position: absolute;
-  top: 92px;
+  top: 48px;
   left: 0;
   right: 0;
   bottom: 0;
   overflow: auto;
   display: flex;
-  padding: 4px 64px 32px;
+  padding: 4px 64px 44px;
   scrollbar-width: thin;
 }
 .ed-spread {
@@ -859,7 +870,7 @@ html[data-reduce-motion="on"] .ed-sel.is-travel { transition: none; }
 html[data-reduce-motion="on"] .ed-sel__h, html[data-reduce-motion="on"] .ed-sel__rot { animation: ed-fade 120ms var(--ease-out) both; animation-delay: 0ms; }
 html[data-reduce-motion="on"] .ed-block.is-removing { transition-duration: 120ms; transform: translate(var(--x, 0px), var(--y, 0px)) rotate(var(--rot, 0deg)); }
 html[data-reduce-motion="on"] .ed-slide { animation: ed-fade 150ms var(--ease-out) both; }
-html[data-reduce-motion="on"] .ed-header, html[data-reduce-motion="on"] .ed-overflow { animation: ed-fade 150ms var(--ease-out) both; }
+html[data-reduce-motion="on"] .ed-footer, html[data-reduce-motion="on"] .ed-overflow { animation: ed-fade 150ms var(--ease-out) both; }
 html[data-reduce-motion="on"] .ed-dots { animation-duration: 150ms; animation-delay: 0ms; }
 html[data-reduce-motion="on"] .ed-block.is-lifted { box-shadow: none; }
 html[data-reduce-motion="on"] .ed-sel__h:hover { transform: none; }
@@ -869,7 +880,7 @@ html[data-reduce-motion="on"] .ed-shimmer { animation: none; background: var(--c
   .ed-sel.is-travel { transition: none; }
   .ed-sel__h, .ed-sel__rot { animation: ed-fade 120ms var(--ease-out) both; animation-delay: 0ms; }
   .ed-slide { animation: ed-fade 150ms var(--ease-out) both; }
-  .ed-header, .ed-overflow { animation: ed-fade 150ms var(--ease-out) both; }
+  .ed-footer, .ed-overflow { animation: ed-fade 150ms var(--ease-out) both; }
   .ed-dots { animation-duration: 150ms; animation-delay: 0ms; }
   .ed-shimmer { animation: none; background: var(--code-bg); }
 }
