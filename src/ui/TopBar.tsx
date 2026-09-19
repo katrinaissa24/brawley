@@ -3,8 +3,9 @@
  * Left: wordmark on the shelf; Back + breadcrumb (+ autosave dot, page number) when a book/page is open.
  * Right: Search, Today, Settings. Also mounts the popovers and binds the chrome's global keys.
  */
-import { useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useEntry, useStore } from '@/model/store'
+import type { Entry } from '@/model/types'
 import { journalFile } from '@/lib/journalFile'
 import { shelfApi } from '@/library/shelfApi'
 import { flip } from '@/book/flip'
@@ -110,11 +111,15 @@ export function TopBar() {
                 <Icon.chevronLeft />
                 <span>{route.view === 'editor' ? T.backToBook : T.back}</span>
               </button>
-              {entry && (
-                <span className={`ui-crumb${crumb ? ' ui-crumb--title' : ''}`} title={crumb || undefined}>
-                  {crumb || T.placeholder[hourPlaceholder()]}
-                </span>
-              )}
+              {entry && (route.view === 'editor'
+                // in the editor this is the journal's own name, and the only place to write it:
+                // the title above the page belongs to the chapter
+                ? <BookName entry={entry} />
+                : (
+                  <span className={`ui-crumb${crumb ? ' ui-crumb--title' : ''}`} title={crumb || undefined}>
+                    {crumb || T.placeholder[hourPlaceholder()]}
+                  </span>
+                ))}
               {route.view !== 'editor' && <SaveDot state={saveState} />}
             </>
           )}
@@ -188,4 +193,43 @@ function SaveDot({ state }: { state: 'idle' | 'pending' | 'saving' | 'saved' | '
     )
   }
   return <span className="ui-savedot" data-state={state} title={label || undefined} role="status" aria-label={label || undefined} />
+}
+
+/**
+ * The journal's name, in the corner of the page editor. Debounced like every other field here:
+ * the store coalesces the keystrokes into one undo step.
+ */
+function BookName({ entry }: { entry: Entry }) {
+  const [value, setValue] = useState(entry.title)
+  const typing = useRef(false)
+  const timer = useRef(0)
+  useEffect(() => { if (!typing.current) setValue(entry.title) }, [entry.title])
+  useEffect(() => () => window.clearTimeout(timer.current), [])
+  const commit = (v: string) => {
+    window.clearTimeout(timer.current)
+    const e = useStore.getState().entries[entry.id]
+    if (!e || e.title === v) return
+    useStore.getState().updateEntry(entry.id, en => ({ ...en, title: v }), { coalesce: 'title' })
+  }
+  return (
+    <input
+      data-book-name
+      className={'ui-crumb ui-crumb--field' + (value.trim() ? ' ui-crumb--title' : '')}
+      value={value}
+      size={Math.max(10, Math.min(30, value.length + 1))}
+      placeholder={S.editor.bookPlaceholder}
+      aria-label={S.editor.a11y.bookName}
+      title={value.trim() || undefined}
+      spellCheck
+      onChange={e => {
+        const v = e.target.value
+        setValue(v)
+        window.clearTimeout(timer.current)
+        timer.current = window.setTimeout(() => commit(v), 300)
+      }}
+      onKeyDown={e => { if (e.key === 'Enter' || e.key === 'Escape') { e.preventDefault(); commit(value); e.currentTarget.blur() } }}
+      onFocus={() => { typing.current = true }}
+      onBlur={() => { typing.current = false; commit(value) }}
+    />
+  )
 }

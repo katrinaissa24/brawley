@@ -16,11 +16,16 @@ import { addBlock, firstFreeRow, newImageBlock, updateBlock } from './ops'
 import { CONTENT_MAX_X, CONTENT_MAX_Y, type CellRect } from './snap'
 import type { EditorSession } from './session'
 
-export interface PendingImage extends CellRect { key: number }
+export interface PendingImage extends CellRect { key: number; page: number }
 
 let seq = 0
 
-export function useImageImport(session: EditorSession) {
+/**
+ * `current` names the page a file lands on when the caller does not: the editor's active surface,
+ * which moves between the two pages of a spread, so the importer is asked for it at drop time
+ * rather than holding the session it was built with.
+ */
+export function useImageImport(current: () => EditorSession) {
   const [pending, setPending] = useState<PendingImage[]>([])
   const alive = useRef(true)
   // set on mount as well as cleared on unmount: StrictMode runs mount -> cleanup -> mount, and a
@@ -30,7 +35,7 @@ export function useImageImport(session: EditorSession) {
     return () => { alive.current = false }
   }, [])
 
-  const placeFor = useCallback((at?: { x: number; y: number }, h = 12): { x: number; y: number } => {
+  const placeFor = useCallback((session: EditorSession, at?: { x: number; y: number }, h = 12): { x: number; y: number } => {
     const page = session.page()
     const blocks = page?.blocks ?? []
     const heights = session.heights
@@ -40,21 +45,22 @@ export function useImageImport(session: EditorSession) {
       return { x, y }
     }
     return { x: PAGE_MARGIN, y: firstFreeRow(blocks, heights, h) }
-  }, [session])
+  }, [])
 
-  const importFiles = useCallback(async (files: File[], at?: { x: number; y: number }) => {
+  const importFiles = useCallback(async (files: File[], at?: { x: number; y: number }, into?: EditorSession) => {
+    const session = into ?? current()
     const st = useStore.getState()
     let place = at
     const added: Id[] = []
     for (const file of files) {
       const key = ++seq
-      const spot = placeFor(place)
-      setPending(p => [...p, { key, x: spot.x, y: spot.y, w: DEFAULT_IMAGE_W, h: 12 }])
+      const spot = placeFor(session, place)
+      setPending(p => [...p, { key, page: session.pageIndex, x: spot.x, y: spot.y, w: DEFAULT_IMAGE_W, h: 12 }])
       try {
         const draft = await db.prepareMedia(file, session.entryId)
         draft.stored.catch(() => { if (alive.current) useStore.getState().toast(S.editor.image.failed) })
         if (!alive.current) return
-        const block = newImageBlock(draft.id, draft.width, draft.height, placeFor(place, Math.round((DEFAULT_IMAGE_W * draft.height) / Math.max(1, draft.width))))
+        const block = newImageBlock(draft.id, draft.width, draft.height, placeFor(session, place, Math.round((DEFAULT_IMAGE_W * draft.height) / Math.max(1, draft.width))))
         if (draft.media) { block.media = draft.media; block.playback = 'auto' }
         session.justAdded.add(block.id)
         session.commit(e => addBlock(e, session.pageIndex, block))
@@ -69,10 +75,11 @@ export function useImageImport(session: EditorSession) {
       place = undefined // the next one goes below
     }
     if (added.length) useStore.getState().select([added[added.length - 1]])
-  }, [session, placeFor])
+  }, [current, placeFor])
 
   /** Replace the picture of an existing block, keeping its width and re-deriving the height. */
-  const replaceImage = useCallback(async (blockId: Id, file: File) => {
+  const replaceImage = useCallback(async (blockId: Id, file: File, into?: EditorSession) => {
+    const session = into ?? current()
     const st = useStore.getState()
     try {
       const draft = await db.prepareMedia(file, session.entryId)
@@ -91,7 +98,7 @@ export function useImageImport(session: EditorSession) {
       const msg = err instanceof ImageTooLargeError ? S.editor.image.tooBig : err instanceof NotAnImageError ? S.editor.image.unsupported : S.editor.image.failed
       st.toast(msg)
     }
-  }, [session])
+  }, [current])
 
   return { importFiles, replaceImage, pending }
 }

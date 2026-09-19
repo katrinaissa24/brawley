@@ -120,7 +120,7 @@ export interface AppState {
   setCropping(id: Id | null): void
   setScale(s: number): void
   flushSave(): Promise<void>
-  toast(message: string, opts?: { undo?: () => void; ms?: number }): number
+  toast(message: string, opts?: { undo?: () => void; action?: Toast['action']; ms?: number }): number
   dismissToast(id: number): void
   setSearch(q: string): void
   markSeeded(): void
@@ -397,7 +397,7 @@ export const useStore = create<AppState>()((set, get) => ({
 
   toast(message, opts) {
     const id = ++toastSeq
-    const t: Toast = { id, message, undo: opts?.undo, ms: opts?.ms ?? (opts?.undo ? 6000 : 3500) }
+    const t: Toast = { id, message, undo: opts?.undo, action: opts?.action, ms: opts?.ms ?? (opts?.undo || opts?.action ? 6000 : 3500) }
     set({ toasts: [...get().toasts.slice(-2), t] })
     window.setTimeout(() => get().dismissToast(id), t.ms)
     return id

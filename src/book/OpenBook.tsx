@@ -15,6 +15,7 @@ import { S } from '@/copy/strings'
 import { formatLong } from '@/lib/dates'
 import { shelfApi } from '@/library/shelfApi'
 import { imageUrls } from '@/lib/db'
+import { removePage as dropPage } from '@/editor/ops'
 import { flip } from './flip'
 import { bookRegistry } from './registry'
 import { Sheet, type SheetEls } from './Sheet'
@@ -391,7 +392,7 @@ export function OpenBook() {
     setMenu(null)
     if (!e || e.pages.length <= 1) return
     const st = useStore.getState()
-    st.updateEntry(e.id, x => ({ ...x, pages: x.pages.filter((_, i) => i !== pageIndex) }))
+    st.updateEntry(e.id, x => dropPage(x, pageIndex))
     sound.whump()
     st.toast(S.book.pageRemoved, { undo: () => { if (useStore.getState().undo()) sound.undo() } })
   }

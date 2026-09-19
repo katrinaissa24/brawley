@@ -3,10 +3,21 @@ export const editor = {
   back: 'Back to book',
   changeDate: 'Change date',
   pageOf: (n: number, total: number) => `Page ${n} of ${total}`,
+  pagesOf: (a: number, b: number, total: number) => `Pages ${a}–${b} of ${total}`,
+  coverAndPage: (total: number) => `Front cover · page 1 of ${total}`,
   addPage: 'Add a page',
   pageAdded: 'Page added',
   prevPage: 'Previous page',
   nextPage: 'Next page',
+  /** the journal's own name, kept in the top-left corner while you write */
+  bookPlaceholder: 'Name this journal',
+  /** the chapter the open page belongs to, above the page */
+  chapterPlaceholder: 'Chapter',
+  chapterStart: 'Start a chapter on this page',
+  chapterFold: 'Fold this chapter into the one before',
+  chapterStarted: 'A chapter starts here',
+  chapterFolded: 'Chapter folded into the one before',
+  layout: { one: 'One page', two: 'Two pages, side by side' },
   /** Header title field + the empty title-kind block, rotating by local hour. */
   titlePlaceholder: { morning: 'This morning', afternoon: 'This afternoon', night: 'Tonight' },
   placeholder: {
@@ -68,6 +79,9 @@ export const editor = {
   },
   link: {
     prompt: 'Link address',
+    placeholder: 'example.com',
+    add: 'Add link',
+    cancel: 'Cancel',
   },
   zoom: { fit: 'Fit to window', in: 'Zoom in', out: 'Zoom out' },
   size: (w: number, h: number) => `${w} × ${h}`,
@@ -77,6 +91,9 @@ export const editor = {
     page: 'Page',
     document: 'Document',
     title: 'Title',
+    bookName: 'Journal name',
+    chapter: 'Chapter title',
+    layout: 'Page layout',
     grab: 'Move text',
     selection: 'Selection',
     resize: 'Resize',

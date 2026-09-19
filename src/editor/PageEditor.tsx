@@ -1,10 +1,18 @@
 /**
  * PageEditor — surface 3. A fixed overlay above the book with an opaque paper backdrop, a slim
- * header (title input, date button, autosave dot, page number), and the page: an UNSCALED box
- * `[data-editor-page]` (registered with setEditorPageEl for the book's FLIP) whose inner layer is
- * scaled to fit (Cmd+0 / − / = zoom). The InsertRail sits beside the page in the same unscaled
- * stage. DocumentView does the rendering + gestures; this file owns chrome, keys, insertion,
- * paste/drop, page navigation, overflow continuation, the dot-grid moods and the save chime.
+ * header (the journal's own name in the top-left corner beside the way back, the autosave dot,
+ * the layout toggle and the page number), the chapter the open page belongs to written above the
+ * page, and the page itself: an UNSCALED box `[data-editor-page]` (registered with
+ * setEditorPageEl for the book's FLIP) whose inner layer is scaled to fit (Cmd+0 / − / = zoom).
+ *
+ * Two things the pages are read as: the book's front cover is the first face you can turn to and
+ * is edited like any other page, and the layout toggle opens a spread — two pages side by side,
+ * both live, each with its own session and gesture controller. Everything the chrome does (keys,
+ * insertion, paste, the toolbars) goes to the *active* face: the one last written in or pressed.
+ *
+ * The InsertRail sits beside the pages in the same unscaled stage. DocumentView does the
+ * rendering + gestures; this file owns chrome, keys, insertion, paste/drop, page navigation,
+ * overflow continuation, the dot-grid moods and the save chime.
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { flip } from '@/book/flip'
@@ -14,28 +22,54 @@ import { sound } from '@/feel/sound'
 import { formatLong } from '@/lib/dates'
 import { isMediaFile, useImageUrl } from '@/lib/db'
 import { HUES, INK, coverHex, inkFor } from '@/model/palette'
+import { chapterAt, removeChapterAt, setChapterTitle as renameChapter, startChapterAt, startsChapter } from '@/model/contents'
 import { useEntry, useStore } from '@/model/store'
-import { CONTENT, COVER_PAGE, PAGE, PAGE_MARGIN, PITCH, type Entry, type Id, type Rect, type StickerSource, type TextBlock, type TextFont, type TextKind } from '@/model/types'
+import {
+  CONTENT, COVER_PAGE, PAGE, PAGE_MARGIN, PITCH, editorFaces, spreadOfPage,
+  type Entry, type Id, type Rect, type StickerSource, type TextBlock, type TextFont, type TextKind,
+} from '@/model/types'
 import { BubbleToolbar } from './BubbleToolbar'
 import { DocumentView } from './DocumentView'
 import { ImageToolbar } from './ImageToolbar'
 import { InsertRail } from './InsertRail'
-import { hourSlot, splitAtOverflow } from './blocks/TextBody'
+import { splitAtOverflow } from './blocks/TextBody'
 import { selectionRect } from './caret'
 import { addBlock, addPageAfter, pageOf, continueOnNextPage, firstFreeRow, newStickerBlock, newTextBlock, readingOrder, textBlocks, updateBlock } from './ops'
 import { sanitizeHtml } from './sanitize'
 import { EditorSession } from './session'
 import { CONTENT_MAX_X, CONTENT_MAX_Y } from './snap'
 import { randomRotation, stickerById } from './stickers'
-import { useImageImport } from './useImageImport'
+import { useImageImport, type PendingImage } from './useImageImport'
 import './editor.css'
 
 const ZOOM_MIN = 0.5
 const ZOOM_MAX = 1.25
 const ZOOM_STEP = 0.1
-const fitScale = () => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.min((window.innerWidth - 96) / PAGE.w, (window.innerHeight - 140) / PAGE.h)))
+/** the gutter between the two pages of a spread, in unscaled page px */
+const GUTTER = 28
+
+const fitScale = (faces: number) => {
+  const floor = faces > 1 ? 0.3 : ZOOM_MIN
+  const w = (window.innerWidth - 120 - (faces - 1) * GUTTER) / (PAGE.w * faces)
+  const h = (window.innerHeight - 196) / PAGE.h
+  return Math.min(ZOOM_MAX, Math.max(floor, Math.min(w, h)))
+}
 const toRect = (r: DOMRect): Rect => ({ x: r.left, y: r.top, w: r.width, h: r.height })
+/** The journal's name is written in the top bar (src/ui owns it); a new book asks for it there. */
+const focusBookName = () => document.querySelector<HTMLInputElement>('[data-book-name]')?.focus({ preventScroll: true })
 const sameRect = (a: Rect | null, b: Rect | null) => !!a && !!b && a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h
+
+/** One face of what the editor is showing: a page (the cover counts as one) or the slot after the last. */
+interface Face { index: number; add: boolean }
+/** The faces for a position in the book: one page, or the spread it belongs to. */
+function facesOf(pageCount: number, pageIndex: number, twoPage: boolean): Face[] {
+  if (!twoPage) return [{ index: pageIndex, add: false }]
+  const [l, r] = editorFaces(spreadOfPage(pageIndex))
+  const face = (i: number): Face => ({ index: i, add: i !== COVER_PAGE && i >= pageCount })
+  return [face(l), face(r)]
+}
+/** Element registry for one open face. */
+interface Surface { page: HTMLElement; scaled: HTMLElement; ghost: HTMLElement }
 
 export function PageEditor() {
   const route = useStore(s => s.route)
@@ -47,116 +81,146 @@ export function PageEditor() {
 }
 
 function Editor({ entry, pageIndex, routeIndex }: { entry: Entry; pageIndex: number; routeIndex: number }) {
-  const session = useMemo(() => new EditorSession(entry.id, pageIndex), [entry.id])
-  if (session.pageIndex !== pageIndex) { session.pageIndex = pageIndex; session.mounted = false }
-  useEffect(() => () => session.dispose(), [session])
-
   const saveState = useStore(s => s.saveState)
   const selection = useStore(s => s.selection)
   const editingId = useStore(s => s.editingBlockId)
   const cropping = useStore(s => s.croppingBlockId)
-  const isCover = pageIndex === COVER_PAGE
-  const page = pageOf(entry, pageIndex)!
+  const twoPage = useStore(s => s.settings.twoPage)
+  const pageCount = entry.pages.length
+
+  const faces = useMemo(() => facesOf(pageCount, pageIndex, twoPage), [pageCount, pageIndex, twoPage])
+  const live = faces.filter(f => !f.add).map(f => f.index)
+  const liveKey = live.join(',')
+
+  /* ---------- one session per open face; the active one takes every chrome action ----------
+   * The pool is keyed by page index and outlives a turn of the page, so a face that stays open
+   * across a spread change keeps its element registries. sessionFor never returns nothing: a
+   * lookup for a face that is open makes its session if the pool has been emptied under it.
+   */
+  const pool = useRef(new Map<number, EditorSession>()).current
+  const sessionFor = useCallback((i: number): EditorSession => {
+    let s = pool.get(i)
+    if (!s) { s = new EditorSession(entry.id, i); pool.set(i, s) }
+    return s
+  }, [pool, entry.id])
+  const sessions = useMemo(() => {
+    const keep = new Set(live)
+    for (const [k, s] of Array.from(pool)) if (!keep.has(k)) { s.dispose(); pool.delete(k) }
+    return live.map(sessionFor)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [liveKey, sessionFor])
+
+  const [activePage, setActivePage] = useState(pageIndex)
+  const activeIndex = live.includes(activePage) ? activePage : pageIndex
+  const session = live.includes(activeIndex) ? sessionFor(activeIndex) : sessions[sessions.length - 1]
+  const sessionRef = useRef(session)
+  sessionRef.current = session
+  const activate = useCallback((i: number) => setActivePage(p => (p === i ? p : i)), [])
+  useEffect(() => { setActivePage(pageIndex) }, [pageIndex])
+
+  const isCover = activeIndex === COVER_PAGE
+  const page = pageOf(entry, activeIndex)!
   const blocks = page.blocks
 
-  const [scale, setScale] = useState(fitScale)
+  const [scale, setScale] = useState(() => fitScale(faces.length))
   const userZoom = useRef(false)
   const [gesture, setGesture] = useState(false)
   const [bubble, setBubble] = useState<{ anchor: Rect; id: Id } | null>(null)
+  const [link, setLink] = useState<{ anchor: Rect; id: Id; page: number } | null>(null)
   const [imgAnchor, setImgAnchor] = useState<Rect | null>(null)
-  const [overflowIds, setOverflowIds] = useState<Id[]>([])
+  const [overflow, setOverflow] = useState<{ id: Id; page: number }[]>([])
   const [dir, setDir] = useState(0)
   const [closing, setClosing] = useState(false)
   const [words, setWords] = useState(false)
 
   const rootRef = useRef<HTMLDivElement>(null)
   const stageRef = useRef<HTMLDivElement>(null)
-  const pageRef = useRef<HTMLDivElement>(null)
-  const scaledRef = useRef<HTMLDivElement>(null)
-  const ghostRef = useRef<HTMLDivElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
-  const titleRef = useRef<HTMLInputElement>(null)
+  const chapterRef = useRef<HTMLInputElement>(null)
   const railRef = useRef<HTMLDivElement>(null)
-  const replaceFor = useRef<Id | null>(null)
-  const { importFiles, replaceImage, pending } = useImageImport(session)
+  const replaceFor = useRef<{ id: Id; page: number } | null>(null)
+  const surfaces = useRef(new Map<number, Surface>()).current
+  const registerSurface = useCallback((i: number, els: Surface | null) => {
+    if (els) surfaces.set(i, els)
+    else surfaces.delete(i)
+  }, [surfaces])
+  const { importFiles, replaceImage, pending } = useImageImport(useCallback(() => sessionRef.current, []))
 
   /* ---------- route sanity ---------- */
   useEffect(() => {
     if (routeIndex !== pageIndex) useStore.getState().openPage(entry.id, pageIndex)
   }, [routeIndex, pageIndex, entry.id])
 
-  /* ---------- page element for the book's FLIP ---------- */
-  useLayoutEffect(() => {
-    const el = pageRef.current
-    if (!el) return
-    useStore.getState().setEditorPageEl(el)
-    return () => { if (useStore.getState().editorPageEl === el) useStore.getState().setEditorPageEl(null) }
-  }, [])
-  useLayoutEffect(() => {
-    session.pageEl = scaledRef.current
-    return () => { session.pageEl = null }
-  }, [session])
-
   /* ---------- zoom ---------- */
   useEffect(() => { useStore.getState().setScale(scale) }, [scale])
   useEffect(() => {
-    const on = () => { if (!userZoom.current) setScale(fitScale()) }
+    const on = () => { if (!userZoom.current) setScale(fitScale(faces.length)) }
+    on()
     window.addEventListener('resize', on)
     return () => window.removeEventListener('resize', on)
-  }, [])
+  }, [faces.length])
   const zoom = useCallback((d: 1 | -1 | 'fit') => {
-    session.flushAll()
-    if (d === 'fit') { userZoom.current = false; setScale(fitScale()); return }
+    for (const s of sessions) s.flushAll()
+    if (d === 'fit') { userZoom.current = false; setScale(fitScale(faces.length)); return }
     userZoom.current = true
-    setScale(s => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.round((s + d * ZOOM_STEP) * 100) / 100)))
-  }, [session])
+    setScale(s => Math.min(ZOOM_MAX, Math.max(faces.length > 1 ? 0.3 : ZOOM_MIN, Math.round((s + d * ZOOM_STEP) * 100) / 100)))
+  }, [sessions, faces.length])
 
-  /* ---------- gesture / overflow / replace / import events ---------- */
+  /* ---------- gesture / overflow / replace / import / link events, on every open face ---------- */
   useEffect(() => {
-    const over = new Set<Id>()
+    const over = new Map<Id, number>()
     const sync = () => {
-      for (const id of Array.from(over)) if (!session.textEls.has(id)) over.delete(id)
-      setOverflowIds(prev => {
-        const next = Array.from(over)
-        return prev.length === next.length && prev.every((x, i) => x === next[i]) ? prev : next
+      for (const [id, pi] of Array.from(over)) if (!pool.get(pi)?.textEls.has(id)) over.delete(id)
+      setOverflow(prev => {
+        const next = Array.from(over, ([id, p]) => ({ id, page: p }))
+        return prev.length === next.length && prev.every((x, i) => x.id === next[i].id) ? prev : next
       })
     }
-    const offs = [
-      session.on('gesture', (on: boolean) => setGesture(on)),
-      session.on('measure', (id: Id, h: number) => {
-        const b = session.block(id)
-        if (!b) return
-        const isOver = b.y * PITCH + h > CONTENT.y + CONTENT.h
-        if (isOver) over.add(id); else over.delete(id)
-        sync()
-      }),
-      session.on('blocksChanged', sync),
-      session.on('replace', (id: Id) => { replaceFor.current = id; fileRef.current?.click() }),
-      session.on('import', (files: File[]) => { void importFiles(files) }),
-    ]
+    const offs: (() => void)[] = []
+    for (const s of sessions) {
+      offs.push(
+        s.on('gesture', (on: boolean) => setGesture(on)),
+        s.on('measure', (id: Id, h: number) => {
+          const b = s.block(id)
+          if (!b) return
+          if (b.y * PITCH + h > CONTENT.y + CONTENT.h) over.set(id, s.pageIndex)
+          else over.delete(id)
+          sync()
+        }),
+        s.on('blocksChanged', sync),
+        s.on('replace', (id: Id) => { activate(s.pageIndex); replaceFor.current = { id, page: s.pageIndex }; fileRef.current?.click() }),
+        s.on('import', (files: File[]) => { activate(s.pageIndex); void importFiles(files, undefined, s) }),
+        s.on('link', (id: Id, anchor: Rect | null) => {
+          activate(s.pageIndex)
+          setLink({ id, page: s.pageIndex, anchor: anchor ?? { x: innerWidth / 2, y: innerHeight / 2, w: 0, h: 0 } })
+        }),
+      )
+    }
     return () => offs.forEach(f => f())
-  }, [session, importFiles])
+  }, [sessions, pool, importFiles, activate])
 
   /* ---------- starter block + focus after the FLIP lands ---------- */
   useEffect(() => {
+    if (pageIndex === COVER_PAGE) return // a cover starts bare
     const t = window.setTimeout(() => {
-      const e = session.entry()
-      const p = e && pageOf(e, session.pageIndex)
-      if (!e || !p || session.pageIndex === COVER_PAGE) return // a cover starts bare
+      const s = sessionFor(pageIndex)
+      const e = s.entry()
+      const p = e && pageOf(e, pageIndex)
+      if (!e || !p) return
       const texts = readingOrder(textBlocks(p.blocks))
       if (!p.blocks.length) {
         const nb = newTextBlock('body', PAGE_MARGIN, PAGE_MARGIN, CONTENT.cols)
-        session.commit(en => addBlock(en, session.pageIndex, nb), { silent: true })
-        if (!e.title && session.pageIndex === 0) titleRef.current?.focus({ preventScroll: true })
-        else session.focus(nb.id, 'start')
+        s.commit(en => addBlock(en, pageIndex, nb), { silent: true })
+        if (!e.title && pageIndex === 0) focusBookName()
+        else s.focus(nb.id, 'start')
         return
       }
-      if (!e.title && session.pageIndex === 0) { titleRef.current?.focus({ preventScroll: true }); return }
+      if (!e.title && pageIndex === 0) { focusBookName(); return }
       const last = texts[texts.length - 1]
-      if (last) session.focus(last.id, 'end')
+      if (last) s.focus(last.id, 'end')
     }, MOTION.reduced ? 180 : 460)
     return () => window.clearTimeout(t)
-  }, [session, pageIndex])
+  }, [sessionFor, pageIndex])
 
   /* ---------- bubble toolbar: 250ms after the selection settles (400ms for a caret in an empty block) ---------- */
   useEffect(() => {
@@ -166,8 +230,9 @@ function Editor({ entry, pageIndex, routeIndex }: { entry: Entry; pageIndex: num
       t = 0
       const st = useStore.getState()
       const id = st.editingBlockId
-      if (!id || session.gesture) { hide(); return }
-      const el = session.textEls.get(id)
+      const s = id ? sessions.find(x => x.textEls.has(id)) : undefined
+      if (!id || !s || s.gesture) { hide(); return }
+      const el = s.textEls.get(id)
       const sel = window.getSelection()
       if (!el || !sel || !sel.rangeCount || !el.contains(sel.getRangeAt(0).startContainer)) { hide(); return }
       if (sel.isCollapsed && el.dataset.empty !== '1') { hide(); return }
@@ -183,7 +248,7 @@ function Editor({ entry, pageIndex, routeIndex }: { entry: Entry; pageIndex: num
     }
     document.addEventListener('selectionchange', on)
     return () => { document.removeEventListener('selectionchange', on); window.clearTimeout(t) }
-  }, [session])
+  }, [sessions])
   useEffect(() => { if (!editingId || gesture) setBubble(b => (b ? null : b)) }, [editingId, gesture])
 
   /* ---------- image toolbar anchor (under the selected picture; never during a gesture) ---------- */
@@ -200,30 +265,45 @@ function Editor({ entry, pageIndex, routeIndex }: { entry: Entry; pageIndex: num
   }, [session])
   useLayoutEffect(() => { measureImage() }, [measureImage, imgKey, gesture, scale])
 
-  /* ---------- keys (capture, so the editor's Esc ladder runs before App's) ---------- */
-  const go = useCallback((d: -1 | 1) => {
-    const n = pageIndex + d
-    const e = session.entry()
-    if (!e || pageIndex === COVER_PAGE || n < 0 || n >= e.pages.length) return
-    session.flushAll()
+  /* ---------- turning pages ----------
+   * The editor's own order is the cover first, then every page: turning left from page 0 reaches
+   * the front cover, and turning right past the last page writes a new one. In spread mode a turn
+   * moves a whole spread, and the route keeps the left face of it.
+   */
+  const maxSpread = spreadOfPage(Math.max(0, pageCount - 1))
+  const canBack = twoPage ? spreadOfPage(pageIndex) > 0 : pageIndex !== COVER_PAGE
+  const atEnd = twoPage ? spreadOfPage(pageIndex) >= maxSpread : pageIndex >= pageCount - 1
+  const goTo = useCallback((next: number, d: -1 | 1) => {
+    for (const s of sessions) s.flushAll()
     setDir(d)
-    useStore.getState().openPage(entry.id, n)
-  }, [session, pageIndex, entry.id])
-  const addPage = useCallback(() => {
-    session.flushAll()
-    const e = session.entry()
-    if (!e || pageIndex === COVER_PAGE) return
-    const r = addPageAfter(e, pageIndex)
+    useStore.getState().openPage(entry.id, next)
+  }, [sessions, entry.id])
+  const addPage = useCallback((after = activeIndex) => {
+    for (const s of sessions) s.flushAll()
+    const e = pool.get(activeIndex)?.entry() ?? entry
+    const r = addPageAfter(e, Math.max(0, Math.min(after, e.pages.length - 1)))
     useStore.getState().commitEntry(r.entry)
     setDir(1)
     useStore.getState().openPage(entry.id, r.index)
     useStore.getState().toast(S.editor.pageAdded)
-  }, [session, pageIndex, entry.id])
+  }, [sessions, pool, activeIndex, entry])
+  const go = useCallback((d: -1 | 1) => {
+    if (d === -1) {
+      if (!canBack) return
+      if (twoPage) { const [l] = editorFaces(spreadOfPage(pageIndex) - 1); goTo(l, -1); return }
+      goTo(pageIndex === 0 ? COVER_PAGE : pageIndex - 1, -1)
+      return
+    }
+    if (atEnd) { addPage(pageCount - 1); return }
+    if (twoPage) { const [l] = editorFaces(spreadOfPage(pageIndex) + 1); goTo(l, 1); return }
+    goTo(pageIndex === COVER_PAGE ? 0 : pageIndex + 1, 1)
+  }, [canBack, atEnd, twoPage, pageIndex, pageCount, goTo, addPage])
+
   const close = useCallback(() => {
-    session.flushAll()
+    for (const s of sessions) s.flushAll()
     setClosing(true)
     void flip.closeEditor()
-  }, [session])
+  }, [sessions])
   const openStickerPicker = useCallback(() => {
     railRef.current?.querySelector<HTMLButtonElement>('button[aria-haspopup="dialog"]')?.click()
   }, [])
@@ -237,7 +317,7 @@ function Editor({ entry, pageIndex, routeIndex }: { entry: Entry; pageIndex: num
     let at = { x: Math.round(PAGE.cols / 2 - w / 2), y: Math.round(PAGE.rows / 2 - h / 2) }
     const st = useStore.getState()
     const editingEl = st.editingBlockId ? session.textEls.get(st.editingBlockId) : null
-    const layer = scaledRef.current
+    const layer = session.pageEl
     if (editingEl && layer) {
       const r = selectionRect()
       const pr = layer.getBoundingClientRect()
@@ -258,10 +338,10 @@ function Editor({ entry, pageIndex, routeIndex }: { entry: Entry; pageIndex: num
       const inEditable = !!t && (t.isContentEditable || t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT')
       const st = useStore.getState()
       const meta = e.metaKey || e.ctrlKey
-      if (t && t.closest && t.closest('.ed-stickers, .ed-stkmaker')) return // the sticker picker owns its keys
+      if (t && t.closest && t.closest('.ed-stickers, .ed-stkmaker, .ed-linkfield')) return // those own their keys
       if (e.key === 'Escape') {
         if (st.popover) return
-        if (t === titleRef.current) { e.preventDefault(); titleRef.current?.blur(); return }
+        if (t === chapterRef.current) { e.preventDefault(); chapterRef.current?.blur(); return }
         if (inEditable && t && root && root.contains(t) && t.isContentEditable) return // TextBody: editing → selected
         if (inEditable) return // another field (search…) owns Esc
         if (st.croppingBlockId) { e.preventDefault(); st.setCropping(null); return }
@@ -332,26 +412,38 @@ function Editor({ entry, pageIndex, routeIndex }: { entry: Entry; pageIndex: num
     return () => document.removeEventListener('paste', onPaste)
   }, [session, importFiles])
 
-  /* ---------- drag-drop of files: snapped dashed ghost, then place at the drop cell ---------- */
-  const dropCell = useRef<{ x: number; y: number } | null>(null)
+  /* ---------- drag-drop of files: snapped dashed ghost on the page under the pointer ---------- */
+  const drop = useRef<{ page: number; x: number; y: number } | null>(null)
+  const ghostOff = useCallback(() => {
+    for (const s of surfaces.values()) s.ghost.removeAttribute('data-on')
+    drop.current = null
+  }, [surfaces])
   const ghostAt = (clientX: number, clientY: number) => {
-    const layer = scaledRef.current
-    const ghost = ghostRef.current
-    if (!layer || !ghost) return
-    const pr = layer.getBoundingClientRect()
+    // the page the pointer is over, else the nearest one (a drop just outside still lands)
+    let best: { i: number; s: Surface; d: number } | null = null
+    for (const [i, s] of surfaces) {
+      const r = s.scaled.getBoundingClientRect()
+      const dx = Math.max(r.left - clientX, 0, clientX - r.right)
+      const dy = Math.max(r.top - clientY, 0, clientY - r.bottom)
+      const d = Math.hypot(dx, dy)
+      if (!best || d < best.d) best = { i, s, d }
+    }
+    if (!best) return
+    for (const [i, s] of surfaces) if (i !== best.i) s.ghost.removeAttribute('data-on')
+    const pr = best.s.scaled.getBoundingClientRect()
     const gw = 18, gh = 12
     let cx = Math.round((clientX - pr.left) / scale / PITCH - gw / 2)
     let cy = Math.round((clientY - pr.top) / scale / PITCH - gh / 2)
     cx = Math.min(Math.max(cx, PAGE_MARGIN), CONTENT_MAX_X - gw)
     cy = Math.min(Math.max(cy, PAGE_MARGIN), CONTENT_MAX_Y - gh)
-    dropCell.current = { x: cx, y: cy }
-    ghost.style.setProperty('--gx', cx * PITCH + 'px')
-    ghost.style.setProperty('--gy', cy * PITCH + 'px')
-    ghost.style.setProperty('--gw', gw * PITCH + 'px')
-    ghost.style.setProperty('--gh', gh * PITCH + 'px')
-    ghost.dataset.on = '1'
+    drop.current = { page: best.i, x: cx, y: cy }
+    const g = best.s.ghost
+    g.style.setProperty('--gx', cx * PITCH + 'px')
+    g.style.setProperty('--gy', cy * PITCH + 'px')
+    g.style.setProperty('--gw', gw * PITCH + 'px')
+    g.style.setProperty('--gh', gh * PITCH + 'px')
+    g.dataset.on = '1'
   }
-  const ghostOff = () => { ghostRef.current?.removeAttribute('data-on'); dropCell.current = null }
   const onDragOver = (e: React.DragEvent) => {
     if (!e.dataTransfer.types.includes('Files')) return
     e.preventDefault()
@@ -367,43 +459,47 @@ function Editor({ entry, pageIndex, routeIndex }: { entry: Entry; pageIndex: num
     if (!e.dataTransfer.types.includes('Files')) return
     e.preventDefault()
     const files = Array.from(e.dataTransfer.files).filter(isMediaFile)
-    const at = dropCell.current ?? undefined
+    const at = drop.current
     ghostOff()
-    if (files.length) void importFiles(files, at)
-    else useStore.getState().toast(S.editor.image.unsupported)
+    if (!files.length) { useStore.getState().toast(S.editor.image.unsupported); return }
+    const into = at ? pool.get(at.page) : undefined
+    if (at) activate(at.page)
+    void importFiles(files, at ? { x: at.x, y: at.y } : undefined, into)
   }
 
   /* ---------- dots step aside while you write; wake on pointer travel ---------- */
   useEffect(() => {
-    const layer = scaledRef.current
     const root = rootRef.current
-    if (!layer || !root) return
+    if (!root) return
     let t = 0
     let armed = false
     let last: { x: number; y: number } | null = null
-    const offTyping = session.on('typing', () => {
+    const wake = () => {
+      if (!armed) return
+      armed = false
+      window.clearTimeout(t)
+      for (const s of surfaces.values()) delete s.scaled.dataset.typing
+    }
+    const offs = sessions.map(s => s.on('typing', () => {
       if (armed) return
       armed = true
       window.clearTimeout(t)
-      t = window.setTimeout(() => { layer.dataset.typing = '1' }, 400)
-    })
+      t = window.setTimeout(() => { const el = pool.get(s.pageIndex)?.pageEl; if (el) el.dataset.typing = '1' }, 400)
+    }))
     const onMove = (e: PointerEvent) => {
       if (!last) { last = { x: e.clientX, y: e.clientY }; return }
-      if (Math.hypot(e.clientX - last.x, e.clientY - last.y) > 6) {
-        last = { x: e.clientX, y: e.clientY }
-        if (armed) { armed = false; window.clearTimeout(t); delete layer.dataset.typing }
-      }
+      if (Math.hypot(e.clientX - last.x, e.clientY - last.y) > 6) { last = { x: e.clientX, y: e.clientY }; wake() }
     }
     root.addEventListener('pointermove', onMove, { passive: true })
-    return () => { offTyping(); root.removeEventListener('pointermove', onMove); window.clearTimeout(t) }
-  }, [session])
+    return () => { offs.forEach(f => f()); root.removeEventListener('pointermove', onMove); window.clearTimeout(t) }
+  }, [sessions, pool, surfaces])
 
   /* ---------- save chime discipline: session > 3s, idle ≥ 1.5s, engine gates 20s ---------- */
   useEffect(() => {
     const mountedAt = performance.now()
     let lastInput = 0
     let t = 0
-    const offTyping = session.on('typing', () => { lastInput = performance.now() })
+    const offs = sessions.map(s => s.on('typing', () => { lastInput = performance.now() }))
     const unsub = useStore.subscribe((s, prev) => {
       if (s.entries[entry.id] !== prev.entries[entry.id] && s.entries[entry.id]?.updatedAt !== prev.entries[entry.id]?.updatedAt) lastInput = performance.now()
       if (s.saveState === 'saved' && prev.saveState !== 'saved') {
@@ -419,42 +515,46 @@ function Editor({ entry, pageIndex, routeIndex }: { entry: Entry; pageIndex: num
         }, wait)
       }
     })
-    return () => { offTyping(); unsub(); window.clearTimeout(t) }
-  }, [session, entry.id])
+    return () => { offs.forEach(f => f()); unsub(); window.clearTimeout(t) }
+  }, [sessions, entry.id])
 
-  /* ---------- title ---------- */
-  const [title, setTitle] = useState(entry.title)
-  const titleFocused = useRef(false)
-  const titleTimer = useRef(0)
-  useEffect(() => { if (!titleFocused.current) setTitle(entry.title) }, [entry.title])
-  const commitTitle = useCallback((v: string) => {
-    window.clearTimeout(titleTimer.current)
-    titleTimer.current = 0
-    const e = session.entry()
-    if (!e || e.title === v) return
-    useStore.getState().updateEntry(entry.id, en => ({ ...en, title: v }), { coalesce: 'title' })
-  }, [session, entry.id])
-  const onTitleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const v = e.target.value
-    setTitle(v)
-    window.clearTimeout(titleTimer.current)
-    titleTimer.current = window.setTimeout(() => commitTitle(v), 300)
-  }
-  const onTitleKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter' || e.key === 'ArrowDown' || (e.key === 'Tab' && !e.shiftKey)) {
-      e.preventDefault()
-      commitTitle(title)
-      const p = session.page()
-      const first = p ? readingOrder(textBlocks(p.blocks))[0] : undefined
-      if (first) session.focus(first.id, 'start')
-      else {
-        const nb = newTextBlock('body', PAGE_MARGIN, PAGE_MARGIN, CONTENT.cols)
-        session.commit(en => addBlock(en, session.pageIndex, nb))
-        session.focus(nb.id, 'start')
-      }
+  /* ---------- the journal's name and the chapter's title ---------- */
+  const chapter = chapterAt(entry, Math.max(0, live.find(i => i >= 0) ?? 0))
+  const breaksHere = activeIndex >= 0 && startsChapter(entry, activeIndex)
+  const [chapterTitle, setChapterTitle] = useState(chapter.title)
+  const typing = useRef({ chapter: false })
+  const timers = useRef({ chapter: 0 })
+  useEffect(() => { if (!typing.current.chapter) setChapterTitle(chapter.title) }, [chapter.id, chapter.title])
+  const commitChapter = useCallback((v: string) => {
+    window.clearTimeout(timers.current.chapter)
+    const at = Math.max(0, live.find(i => i >= 0) ?? 0)
+    useStore.getState().updateEntry(entry.id, en => renameChapter(en, at, v), { coalesce: 'chapter' })
+  }, [entry.id, liveKey]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => () => window.clearTimeout(timers.current.chapter), [])
+  /** Enter / Tab / ↓ out of a chrome field and into the page. */
+  const intoPage = (commit: () => void) => {
+    commit()
+    const p = session.page()
+    const first = p ? readingOrder(textBlocks(p.blocks))[0] : undefined
+    if (first) session.focus(first.id, 'start')
+    else if (activeIndex !== COVER_PAGE) {
+      const nb = newTextBlock('body', PAGE_MARGIN, PAGE_MARGIN, CONTENT.cols)
+      session.commit(en => addBlock(en, session.pageIndex, nb))
+      session.focus(nb.id, 'start')
     }
   }
-  useEffect(() => () => { window.clearTimeout(titleTimer.current) }, [])
+  const toggleChapterBreak = () => {
+    if (activeIndex < 0) return
+    const st = useStore.getState()
+    if (breaksHere && activeIndex > 0) {
+      st.updateEntry(entry.id, en => removeChapterAt(en, activeIndex))
+      st.toast(S.editor.chapterFolded, { undo: () => { if (useStore.getState().undo()) sound.undo() } })
+    } else if (!breaksHere) {
+      st.updateEntry(entry.id, en => startChapterAt(en, activeIndex))
+      st.toast(S.editor.chapterStarted)
+      window.setTimeout(() => chapterRef.current?.focus({ preventScroll: true }), 0)
+    }
+  }
 
   /* ---------- insertion (rail) ---------- */
   const onAddText = useCallback(() => {
@@ -476,53 +576,57 @@ function Editor({ entry, pageIndex, routeIndex }: { entry: Entry; pageIndex: num
   const onFiles = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files ?? []).filter(isMediaFile)
     e.target.value = ''
-    const id = replaceFor.current
+    const r = replaceFor.current
     replaceFor.current = null
     if (!files.length) return
-    if (id) void replaceImage(id, files[0])
+    if (r) void replaceImage(r.id, files[0], pool.get(r.page))
     else void importFiles(files)
   }
 
   /* ---------- bubble / image toolbar handlers ---------- */
-  const bubbleBlock = bubble ? blocks.find(b => b.id === bubble.id && b.type === 'text') : undefined
+  const bubbleSession = bubble ? sessions.find(s => s.textEls.has(bubble.id)) : undefined
+  const bubbleBlock = bubble && bubbleSession ? bubbleSession.block(bubble.id) : undefined
   const onKind = useCallback((k: TextKind) => {
     const id = bubble?.id
-    if (!id) return
-    session.flushers.get(id)?.()
-    session.commit(e => updateBlock<TextBlock>(e, session.pageIndex, id, { kind: k }))
-    session.textEls.get(id)?.focus({ preventScroll: true })
-  }, [bubble?.id, session])
+    const s = id ? sessions.find(x => x.textEls.has(id)) : undefined
+    if (!id || !s) return
+    s.flushers.get(id)?.()
+    s.commit(e => updateBlock<TextBlock>(e, s.pageIndex, id, { kind: k }))
+    s.textEls.get(id)?.focus({ preventScroll: true })
+  }, [bubble?.id, sessions])
   const onFont = useCallback((f: TextFont) => {
     const id = bubble?.id
-    if (!id) return
-    session.flushers.get(id)?.()
-    session.commit(e => updateBlock<TextBlock>(e, session.pageIndex, id, { font: f === 'serif' ? undefined : f }))
-    session.textEls.get(id)?.focus({ preventScroll: true })
-  }, [bubble?.id, session])
+    const s = id ? sessions.find(x => x.textEls.has(id)) : undefined
+    if (!id || !s) return
+    s.flushers.get(id)?.()
+    s.commit(e => updateBlock<TextBlock>(e, s.pageIndex, id, { font: f === 'serif' ? undefined : f }))
+    s.textEls.get(id)?.focus({ preventScroll: true })
+  }, [bubble?.id, sessions])
   const onFormat = useCallback((cmd: Parameters<NonNullable<ReturnType<EditorSession['formatFns']['get']>>>[0]) => {
     const id = bubble?.id
-    if (id) session.formatFns.get(id)?.(cmd)
-  }, [bubble?.id, session])
+    const s = id ? sessions.find(x => x.textEls.has(id)) : undefined
+    if (id && s) s.formatFns.get(id)?.(cmd)
+  }, [bubble?.id, sessions])
 
   /* ---------- overflow: continue on the next page ---------- */
   const continueNext = useCallback(() => {
-    const id = overflowIds[0]
-    const b = id ? session.block(id) : undefined
-    const el = id ? session.textEls.get(id) : undefined
-    if (!b || b.type !== 'text' || !el) return
-    session.flushAll()
+    const first = overflow[0]
+    const s = first ? pool.get(first.page) : undefined
+    const b = s?.block(first.id)
+    const el = s?.textEls.get(first.id)
+    if (!s || !b || b.type !== 'text' || !el) return
+    s.flushAll()
     const split = splitAtOverflow(el, b.y * PITCH, CONTENT.y + CONTENT.h, scale)
     if (!split) return
-    const cur = session.entry()
+    const cur = s.entry()
     if (!cur) return
-    const r = continueOnNextPage(cur, pageIndex, b.id, split.keep, split.moved)
-    session.justAdded.add(r.id)
+    const r = continueOnNextPage(cur, s.pageIndex, b.id, split.keep, split.moved)
     useStore.getState().commitEntry(r.entry)
-    session.focus(r.id, 'start')
     setDir(1)
     useStore.getState().openPage(entry.id, r.page)
+    window.setTimeout(() => pool.get(r.page)?.focus(r.id, 'start'), 0)
     useStore.getState().toast(S.editor.continued)
-  }, [overflowIds, session, scale, pageIndex, entry.id])
+  }, [overflow, pool, scale, entry.id])
 
   /* ---------- word count on a long press of the page number ---------- */
   const pressTimer = useRef(0)
@@ -531,9 +635,12 @@ function Editor({ entry, pageIndex, routeIndex }: { entry: Entry; pageIndex: num
 
   const E = S.editor
   const n = entry.stats.words
-  const stageW = Math.round(PAGE.w * scale)
-  const stageH = Math.round(PAGE.h * scale)
-  const pageLabel = isCover ? E.coverPage : E.pageOf(pageIndex + 1, entry.pages.length)
+  const pageW = Math.round(PAGE.w * scale)
+  const pageH = Math.round(PAGE.h * scale)
+  const stageW = pageW * faces.length + (faces.length - 1) * Math.round(GUTTER * scale)
+  const pageLabel = twoPage
+    ? faces[0].index === COVER_PAGE ? E.coverAndPage(pageCount) : E.pagesOf(faces[0].index + 1, Math.min(faces[1].index + 1, pageCount), pageCount)
+    : isCover ? E.coverPage : E.pageOf(activeIndex + 1, pageCount)
 
   return (
     <div
@@ -549,30 +656,20 @@ function Editor({ entry, pageIndex, routeIndex }: { entry: Entry; pageIndex: num
 
       <header className="ed-header">
         <div className="ed-header__left" aria-hidden="true" />
-        <div className="ed-header__centre">
-          <input
-            ref={titleRef}
-            className="ed-title"
-            value={title}
-            placeholder={E.titlePlaceholder[hourSlot()]}
-            aria-label={E.a11y.title}
-            spellCheck
-            onChange={onTitleChange}
-            onKeyDown={onTitleKey}
-            onFocus={() => { titleFocused.current = true }}
-            onBlur={() => { titleFocused.current = false; commitTitle(title) }}
-          />
+        <div className="ed-header__right">
           <button
             type="button"
-            className="ed-date"
-            aria-label={E.changeDate}
-            title={E.changeDate}
-            onClick={e => useStore.getState().openPopover({ kind: 'date', entryId: entry.id, anchor: toRect(e.currentTarget.getBoundingClientRect()) })}
+            className="ed-layout"
+            aria-label={E.a11y.layout}
+            aria-pressed={twoPage}
+            title={twoPage ? E.layout.one : E.layout.two}
+            onClick={() => { userZoom.current = false; useStore.getState().setSettings({ twoPage: !twoPage }) }}
           >
-            {formatLong(entry.date)}
+            <svg viewBox="0 0 20 16" width="20" height="16" fill="none" stroke="currentColor" strokeWidth={1.4} aria-hidden="true">
+              <rect x="1.7" y="1.7" width="7.6" height="12.6" rx="1" />
+              {twoPage && <rect x="10.7" y="1.7" width="7.6" height="12.6" rx="1" />}
+            </svg>
           </button>
-        </div>
-        <div className="ed-header__right">
           <SaveDot state={saveState} />
           <button
             type="button"
@@ -590,40 +687,109 @@ function Editor({ entry, pageIndex, routeIndex }: { entry: Entry; pageIndex: num
       </header>
 
       <div className="ed-scroll">
-        <div ref={stageRef} className="ed-stage" style={{ width: stageW, height: stageH }}>
-          <div ref={pageRef} className="ed-page" data-editor-page data-cover={isCover || undefined} aria-label={isCover ? E.coverPage : E.a11y.page} style={isCover ? coverStyle(entry) : undefined}>
-            <div ref={scaledRef} className="ed-scaled" style={{ transform: `scale(${scale})` }}>
-              {isCover && <CoverBackdrop entry={entry} />}
-              <div className="ed-dots" aria-hidden="true" />
-              <div className="ed-dots ed-dots--hot" aria-hidden="true" />
-              <div key={pageIndex} className="ed-slide" style={{ '--dir': dir } as React.CSSProperties}>
-                <DocumentView entry={entry} pageIndex={pageIndex} mode="edit" imageQuality="full" session={session} />
+        <div className="ed-spread">
+          <div className="ed-chapterbar">
+            <input
+              ref={chapterRef}
+              className="ed-chapter"
+              value={chapterTitle}
+              placeholder={E.chapterPlaceholder}
+              aria-label={E.a11y.chapter}
+              spellCheck
+              onChange={e => {
+                const v = e.target.value
+                setChapterTitle(v)
+                window.clearTimeout(timers.current.chapter)
+                timers.current.chapter = window.setTimeout(() => commitChapter(v), 300)
+              }}
+              onKeyDown={e => {
+                if (e.key === 'Enter' || e.key === 'ArrowDown' || (e.key === 'Tab' && !e.shiftKey)) { e.preventDefault(); intoPage(() => commitChapter(chapterTitle)) }
+              }}
+              onFocus={() => { typing.current.chapter = true }}
+              onBlur={() => { typing.current.chapter = false; commitChapter(chapterTitle) }}
+            />
+            <div className="ed-chapterbar__row">
+              <button
+                type="button"
+                className="ed-date"
+                aria-label={E.changeDate}
+                title={E.changeDate}
+                onClick={e => useStore.getState().openPopover({ kind: 'date', entryId: entry.id, anchor: toRect(e.currentTarget.getBoundingClientRect()) })}
+              >
+                {formatLong(entry.date)}
+              </button>
+              {activeIndex >= 0 && (
+                <button
+                  type="button"
+                  className="ed-chapterbreak"
+                  data-on={breaksHere && activeIndex > 0 ? '' : undefined}
+                  aria-label={breaksHere && activeIndex > 0 ? E.chapterFold : E.chapterStart}
+                  title={breaksHere && activeIndex > 0 ? E.chapterFold : E.chapterStart}
+                  disabled={breaksHere && activeIndex === 0}
+                  onClick={toggleChapterBreak}
+                >
+                  <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" aria-hidden="true">
+                    <path d="M2.5 4h11M2.5 12h11" />
+                    {breaksHere && activeIndex > 0 ? <path d="M5.5 8h5" /> : <path d="M8 5.5v5M5.5 8h5" />}
+                  </svg>
+                </button>
+              )}
+            </div>
+          </div>
+
+          <div ref={stageRef} className="ed-stage" style={{ width: stageW, height: pageH }} data-two={faces.length > 1 || undefined}>
+            <div className="ed-pages" style={{ gap: Math.round(GUTTER * scale) }}>
+              {faces.map(f => (f.add
+                ? <AddFace key="add" w={pageW} h={pageH} onAdd={() => addPage(pageCount - 1)} />
+                : (
+                  <PageSurface
+                    key={f.index}
+                    entry={entry}
+                    index={f.index}
+                    session={sessionFor(f.index)}
+                    w={pageW}
+                    h={pageH}
+                    scale={scale}
+                    dir={dir}
+                    primary={f.index === pageIndex}
+                    active={faces.length > 1 && f.index === activeIndex}
+                    pending={pending.filter(p => p.page === f.index)}
+                    onActivate={() => activate(f.index)}
+                    register={registerSurface}
+                  />
+                )))}
+            </div>
+            <div ref={railRef} className="ed-rail-slot">
+              <InsertRail onAddText={onAddText} onAddImage={onAddImage} onAddSticker={addSticker} onCover={onCover} />
+            </div>
+            {overflow.length > 0 && !isCover && (
+              <div className="ed-overflow" role="status">
+                <span className="ed-overflow__label">{E.overflow.label}</span>
+                <button type="button" className="ed-overflow__btn" onClick={continueNext}>{E.overflow.action}</button>
               </div>
-              {pending.map(p => (
-                <div
-                  key={p.key}
-                  className="ed-shimmer"
-                  style={{ '--gx': p.x * PITCH + 'px', '--gy': p.y * PITCH + 'px', '--gw': p.w * PITCH + 'px', '--gh': p.h * PITCH + 'px' } as React.CSSProperties}
-                  aria-hidden="true"
-                />
-              ))}
-              <div ref={ghostRef} className="ed-ghost" aria-label={E.a11y.dropGhost} />
-            </div>
+            )}
           </div>
-          <div ref={railRef} className="ed-rail-slot">
-            <InsertRail onAddText={onAddText} onAddImage={onAddImage} onAddSticker={addSticker} onCover={onCover} />
-          </div>
-          {overflowIds.length > 0 && !isCover && (
-            <div className="ed-overflow" role="status">
-              <span className="ed-overflow__label">{E.overflow.label}</span>
-              <button type="button" className="ed-overflow__btn" onClick={continueNext}>{E.overflow.action}</button>
-            </div>
-          )}
         </div>
       </div>
 
-      {bubble && bubbleBlock && bubbleBlock.type === 'text' && !gesture && (
+      <button type="button" className="ed-arrow -back" hidden={!canBack} aria-label={E.prevPage} title={E.prevPage} onClick={() => go(-1)}>
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M10 3 5 8l5 5" /></svg>
+      </button>
+      <button type="button" className="ed-arrow -fwd" aria-label={atEnd ? E.addPage : E.nextPage} title={atEnd ? E.addPage : E.nextPage} onClick={() => go(1)}>
+        {atEnd
+          ? <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" aria-hidden="true"><path d="M8 3.5v9M3.5 8h9" /></svg>
+          : <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m6 3 5 5-5 5" /></svg>}
+      </button>
+
+      {bubble && bubbleBlock && bubbleBlock.type === 'text' && !gesture && !link && (
         <BubbleToolbar anchor={bubble.anchor} kind={bubbleBlock.kind} onKind={onKind} font={bubbleBlock.font ?? 'serif'} onFont={onFont} onFormat={onFormat} />
+      )}
+      {link && (
+        <LinkField
+          anchor={link.anchor}
+          onCancel={() => { pool.get(link.page)?.textEls.get(link.id)?.focus({ preventScroll: true }); setLink(null) }}
+          onSubmit={url => { pool.get(link.page)?.linkFns.get(link.id)?.(url); setLink(null) }}
+        />
       )}
       {imageSel && imageSel.type === 'image' && imgAnchor && !gesture && (
         <ImageToolbar
@@ -640,11 +806,124 @@ function Editor({ entry, pageIndex, routeIndex }: { entry: Entry; pageIndex: num
               : undefined
             session.commit(e => updateBlock(e, session.pageIndex, id, b => ({ ...b, ...patch }) as typeof b), coalesce ? { coalesce } : undefined)
           }}
-          onReplace={() => { replaceFor.current = imageSel.id; fileRef.current?.click() }}
+          onReplace={() => { replaceFor.current = { id: imageSel.id, page: session.pageIndex }; fileRef.current?.click() }}
           onRemove={() => session.controller?.remove([imageSel.id])}
         />
       )}
       <input ref={fileRef} type="file" accept="image/*,video/*" multiple hidden tabIndex={-1} aria-hidden="true" onChange={onFiles} />
+    </div>
+  )
+}
+
+/* ---------- one open face ---------- */
+
+interface SurfaceProps {
+  entry: Entry
+  index: number
+  session: EditorSession
+  w: number
+  h: number
+  scale: number
+  dir: number
+  /** the face the book's FLIP hands over to and back from */
+  primary: boolean
+  /** shown only in a spread, where one of the two pages has the caret */
+  active: boolean
+  pending: PendingImage[]
+  onActivate(): void
+  register(index: number, els: Surface | null): void
+}
+
+function PageSurface({ entry, index, session, w, h, scale, dir, primary, active, pending, onActivate, register }: SurfaceProps) {
+  const pageRef = useRef<HTMLDivElement>(null)
+  const scaledRef = useRef<HTMLDivElement>(null)
+  const ghostRef = useRef<HTMLDivElement>(null)
+  const isCover = index === COVER_PAGE
+
+  useLayoutEffect(() => {
+    session.pageEl = scaledRef.current
+    return () => { if (session.pageEl === scaledRef.current) session.pageEl = null }
+  }, [session])
+  useLayoutEffect(() => {
+    const page = pageRef.current, scaled = scaledRef.current, ghost = ghostRef.current
+    if (!page || !scaled || !ghost) return
+    register(index, { page, scaled, ghost })
+    return () => register(index, null)
+  }, [index, register])
+  useLayoutEffect(() => {
+    const el = pageRef.current
+    if (!primary || !el) return
+    useStore.getState().setEditorPageEl(el)
+    return () => { if (useStore.getState().editorPageEl === el) useStore.getState().setEditorPageEl(null) }
+  }, [primary])
+
+  return (
+    <div
+      ref={pageRef}
+      className="ed-page"
+      data-editor-page={primary ? '' : undefined}
+      data-cover={isCover || undefined}
+      data-active={active || undefined}
+      aria-label={isCover ? S.editor.coverPage : S.editor.a11y.page}
+      style={{ width: w, height: h, ...(isCover ? coverStyle(entry) : null) }}
+      onPointerDownCapture={onActivate}
+      onFocusCapture={onActivate}
+    >
+      <div ref={scaledRef} className="ed-scaled" style={{ transform: `scale(${scale})` }}>
+        {isCover && <CoverBackdrop entry={entry} />}
+        <div className="ed-dots" aria-hidden="true" />
+        <div className="ed-dots ed-dots--hot" aria-hidden="true" />
+        <div key={index} className="ed-slide" style={{ '--dir': dir } as React.CSSProperties}>
+          <DocumentView entry={entry} pageIndex={index} mode="edit" imageQuality="full" session={session} />
+        </div>
+        {pending.map(p => (
+          <div
+            key={p.key}
+            className="ed-shimmer"
+            style={{ '--gx': p.x * PITCH + 'px', '--gy': p.y * PITCH + 'px', '--gw': p.w * PITCH + 'px', '--gh': p.h * PITCH + 'px' } as React.CSSProperties}
+            aria-hidden="true"
+          />
+        ))}
+        <div ref={ghostRef} className="ed-ghost" aria-label={S.editor.a11y.dropGhost} />
+      </div>
+    </div>
+  )
+}
+
+/** The right half of the last spread when there is no page there yet. */
+function AddFace({ w, h, onAdd }: { w: number; h: number; onAdd: () => void }) {
+  return (
+    <button type="button" className="ed-addface" style={{ width: w, height: h }} onClick={onAdd}>
+      <span>+ {S.editor.addPage}</span>
+    </button>
+  )
+}
+
+/* ---------- the link address, asked for in the page and not in a browser dialog ---------- */
+
+function LinkField({ anchor, onSubmit, onCancel }: { anchor: Rect; onSubmit: (url: string) => void; onCancel: () => void }) {
+  const [url, setUrl] = useState('')
+  const ref = useRef<HTMLInputElement>(null)
+  useEffect(() => { ref.current?.focus() }, [])
+  const L = S.editor.link
+  const top = Math.min(window.innerHeight - 76, anchor.y + anchor.h + 10)
+  const left = Math.max(12, Math.min(window.innerWidth - 300, anchor.x + anchor.w / 2 - 144))
+  return (
+    <div className="ed-capsule ed-linkfield" style={{ left, top }} role="dialog" aria-label={L.prompt}>
+      <input
+        ref={ref}
+        type="text"
+        inputMode="url"
+        value={url}
+        placeholder={L.placeholder}
+        aria-label={L.prompt}
+        onChange={e => setUrl(e.target.value)}
+        onKeyDown={e => {
+          if (e.key === 'Enter') { e.preventDefault(); if (url.trim()) onSubmit(url.trim()) }
+          else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); onCancel() }
+        }}
+      />
+      <button type="button" className="ed-linkfield__go" disabled={!url.trim()} onClick={() => onSubmit(url.trim())}>{L.add}</button>
     </div>
   )
 }
@@ -680,4 +959,3 @@ function CoverBackdrop({ entry }: { entry: Entry }) {
 }
 
 const escapeHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-

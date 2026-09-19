@@ -114,6 +114,7 @@ export const ui = {
     changeFolder: 'Change folder…',
     save: 'Save journal',
     saveUnsaved: 'Save journal · unsaved changes',
+    unsavedNudge: 'Your writing is safe in this browser, but the journal file is behind.',
     saveTip: 'Saved to the file',
     saveUnsavedTip: 'Changes not yet saved to the file · ⌘S',
     saved: (name: string) => `Saved ${name}`,

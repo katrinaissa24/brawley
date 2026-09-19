@@ -59,6 +59,22 @@ button.ui-capsule:active { transform: scale(0.97); }
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 2px; pointer-events: none;
 }
 .ui-crumb--title { font-style: normal; color: var(--fg); }
+/* in the editor the crumb is the journal's name and the only place to write it */
+.ui-crumb--field {
+  pointer-events: auto;
+  width: auto;
+  min-width: 10ch;
+  height: 24px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  outline: none;
+  transition: background-color 120ms var(--ease-out);
+}
+.ui-crumb--field::placeholder { color: var(--faint); font-style: italic; }
+.ui-crumb--field:hover { background: var(--sel); }
+.ui-crumb--field:focus { background: var(--sel); }
+.ui-crumb--field:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .ui-pageno { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; pointer-events: none; }
 
 /* autosave dot: invisible at rest, ring while pending, pulse while writing, fills then fades on success */

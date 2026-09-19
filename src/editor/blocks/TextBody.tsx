@@ -139,24 +139,44 @@ export const TextBody = memo(function TextBody({ block, session, placeholder, on
       const a = selectionAncestor(el, 'a')
       if (a) document.execCommand('unlink')
       else {
+        // the address is asked for in the editor, not in a browser dialog: hold on to the
+        // selection (the field is about to take the focus) and wait for linkWith below
         const sel = window.getSelection()
         if (!sel || sel.isCollapsed) return
-        const url = window.prompt(S.editor.link.prompt, '') ?? ''
-        if (!url) return
-        const href = isHttpUrl(url) ? url.trim() : 'https://' + url.trim()
-        if (!isHttpUrl(href)) return
-        document.execCommand('createLink', false, href)
+        session.savedRange = sel.getRangeAt(0).cloneRange()
+        const r = selectionRect()
+        session.emit('link', id, r ? { x: r.left, y: r.top, w: r.width, h: r.height } : null)
+        return
       }
     } else if (cmd === 'list') document.execCommand('insertUnorderedList')
     else document.execCommand(cmd)
     onInput()
     flush()
   }, [session, onInput, flush])
+  /** Put a link around the selection the address field borrowed the focus from. */
+  const linkWith = useCallback((url: string) => {
+    const el = ref.current
+    if (!el || !session) return
+    const href = isHttpUrl(url) ? url.trim() : 'https://' + url.trim()
+    if (!isHttpUrl(href)) return
+    el.focus({ preventScroll: true })
+    const saved = session.savedRange
+    if (saved) {
+      const sel = window.getSelection()
+      sel?.removeAllRanges()
+      sel?.addRange(saved)
+      session.savedRange = null
+    }
+    document.execCommand('createLink', false, href)
+    onInput()
+    flush()
+  }, [session, onInput, flush])
   useLayoutEffect(() => {
     if (!session) return
     session.formatFns.set(id, format)
-    return () => { session.formatFns.delete(id) }
-  }, [session, id, format])
+    session.linkFns.set(id, linkWith)
+    return () => { session.formatFns.delete(id); session.linkFns.delete(id) }
+  }, [session, id, format, linkWith])
 
   useEffect(() => () => window.clearTimeout(timer.current), [])
 

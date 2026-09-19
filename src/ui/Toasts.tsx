@@ -56,6 +56,15 @@ export function Toasts() {
               {S.ui.toast.undo}
             </button>
           )}
+          {t.action && (
+            <button
+              type="button"
+              className="ui-toast__undo"
+              onClick={() => { t.action?.run(); useStore.getState().dismissToast(t.id) }}
+            >
+              {t.action.label}
+            </button>
+          )}
         </div>
       ))}
     </div>

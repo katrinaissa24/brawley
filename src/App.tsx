@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { useStore } from '@/model/store'
 import { journalFile } from '@/lib/journalFile'
 import { sound } from '@/feel/sound'
@@ -44,6 +44,21 @@ export default function App() {
   // a file the app could not write to: say so once, the writing itself is safe in the database
   useEffect(() => {
     if (journal.mode === 'folder' && journal.error === 'write') useStore.getState().toast(S.ui.settings.writeFailed, { ms: 6000 })
+  }, [journal])
+  // the downloaded file falls behind the writing: a word about it in the app, never a browser
+  // dialog on the way out — the writing itself is in the database either way
+  const nudged = useRef(0)
+  useEffect(() => {
+    if (journal.mode !== 'download' || !journal.unsaved) return
+    const t = window.setTimeout(() => {
+      if (Date.now() - nudged.current < 600000) return
+      nudged.current = Date.now()
+      useStore.getState().toast(S.ui.settings.unsavedNudge, {
+        ms: 7000,
+        action: { label: S.ui.settings.save, run: () => { void journalFile.save() } },
+      })
+    }, 90000)
+    return () => window.clearTimeout(t)
   }, [journal])
   // status follows the file (a write that failed, then succeeded); a change of mode is applied by
   // whoever made it, after the store has reloaded, so the starter book cannot land in the middle

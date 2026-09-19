@@ -22,7 +22,7 @@ import { HOVER, makeRoom, type Shove } from './crowd'
 import { LabelPill, type Snippet } from './LabelPill'
 import { MonthPill, type MonthPillHandle } from './MonthPill'
 import { Scrubber, type ScrubberHandle } from './Scrubber'
-import { GHOST_ID, GHOST_W, PLANK_SEG, clamp, computeLayout, monthIndexOf, type Slot } from './layout'
+import { GHOST_ID, GHOST_W, PLANK_SEG, clamp, computeLayout, lowerBound, monthIndexOf, type Slot } from './layout'
 import { useShelfScroll, type ShelfScroll, type ShelfWindow } from './useShelfScroll'
 import './shelf.css'
 
@@ -94,8 +94,10 @@ export function Shelf() {
   const hidden = useRef(new Set<string>()).current
   const hov = useRef({
     i: -1, id: '', nb: [] as Shove[], shoveOf: new Map<string, Shove>(), source: 'mouse' as HoverSource,
-    intent: 0, leave: 0, pending: -1, labelTimer: 0,
+    intent: 0, leave: 0, pending: -1, labelTimer: 0, shffAt: 0,
   }).current
+  /** the pointer's last position along the row (content x) and when it was there */
+  const path = useRef({ x: NaN, t: 0 }).current
   const press = useRef<Press | null>(null)
   const pick = useRef<{ id: string; cancel: () => void } | null>(null)
   const nearRef = useRef(0)
@@ -152,6 +154,80 @@ export function Shelf() {
     return f ? toRect(f.getBoundingClientRect()) : null
   }
 
+  /* ---------- the pointer's path along the row ----------
+   * Hit-testing alone loses books: the browser samples the pointer a handful of times a frame and
+   * fires over/out only for what it lands on, so a quick sweep hands us two books out of fifteen.
+   * The row's geometry is known, so the path is walked instead — every coalesced sample is turned
+   * into a content x (the hits layer is the row's own frame: its centre is the focus line) and
+   * every book between two samples is popped, whether the pointer was ever reported on it or not.
+   */
+  /** Slot under a content x (-1 in the gap between two books). */
+  const slotAtContentX = (x: number): number => {
+    const L = layoutRef.current
+    const n = L.slots.length
+    if (!n || !Number.isFinite(x)) return -1
+    const i = clamp(lowerBound(L.xs, x, n) - 1, 0, n - 1)
+    const s = L.slots[i]
+    return x >= s.x - 3 && x <= s.x + s.w + 3 ? i : -1
+  }
+  /** One book's pop. Swapping to the other keyframes restarts it mid-settle, no forced reflow. */
+  const pop = (id: string) => {
+    const el = els.get(id)
+    if (!el || el.hasAttribute('data-hover') || el.hasAttribute('data-pickup')) return
+    el.setAttribute('data-pop', el.getAttribute('data-pop') === 'a' ? 'b' : 'a')
+  }
+  /** Every book the pointer crossed between two content x's. */
+  const popAcross = (from: number, to: number) => {
+    if (MOTION.reduced || !Number.isFinite(from) || !Number.isFinite(to)) return
+    const L = layoutRef.current
+    const n = L.slots.length
+    const lo = Math.min(from, to) - 2
+    const hi = Math.max(from, to) + 2
+    for (let i = clamp(lowerBound(L.xs, lo, n) - 1, 0, n - 1); i < n; i++) {
+      const s = L.slots[i]
+      if (s.x > hi) break
+      if (s.x + s.w >= lo) pop(s.id)
+    }
+  }
+  /** Pops the wake, then asks for the hover itself — at once when the pointer is browsing slowly,
+   *  after a beat when it is sweeping, so the row only gives way where the pointer actually rests. */
+  const trackPath = (e: React.PointerEvent) => {
+    if (away || e.pointerType === 'touch' || press.current?.drag) { path.x = NaN; return }
+    const r = hits.current?.getBoundingClientRect()
+    if (!r) return
+    // only the band the books stand in: a pointer crossing the wall above them or the floor below
+    // is not passing them, and nothing should stir
+    const band = hits.current?.querySelector('.shelf__hit')?.getBoundingClientRect()
+    if (band && (e.clientY < band.top - 24 || e.clientY > band.bottom + 24)) { path.x = NaN; return }
+    const mid = r.left + r.width / 2
+    const x = e.clientX - mid
+    const now = performance.now()
+    let from = path.x
+    if (Number.isFinite(from)) {
+      for (const c of e.nativeEvent.getCoalescedEvents?.() ?? []) { const cx = c.clientX - mid; popAcross(from, cx); from = cx }
+      popAcross(from, x)
+    }
+    const speed = Number.isFinite(path.x) ? Math.abs(x - path.x) / Math.max(1, now - path.t) : 0
+    path.x = x
+    path.t = now
+    const el = slotOf(e.target)
+    const i = el ? Number(el.dataset.i) : slotAtContentX(x)
+    if (i < 0 || Number.isNaN(i)) return
+    cancelLeave()
+    want(i, speed)
+  }
+  /** Ask for the sustained hover on slot i. px/ms: a deliberate pointer gets it on the spot. */
+  const want = (i: number, speed: number) => {
+    const L = layoutRef.current
+    if (L.slots[i]?.id === hov.id) { hov.pending = -1; window.clearTimeout(hov.intent); return }
+    if (hov.pending === i) return
+    hov.pending = i
+    window.clearTimeout(hov.intent)
+    const ms = speed > 0.9 ? 70 : speed > 0.3 ? 35 : 0
+    if (!ms) { applyHover(i, 'mouse'); return }
+    hov.intent = window.setTimeout(() => { if (hov.pending === i) applyHover(i, 'mouse') }, ms)
+  }
+
   /* ---------- hover (pull-out + neighbours + label) ---------- */
   const applyHover = useCallback((i: number, source: HoverSource) => {
     const L = layoutRef.current
@@ -185,7 +261,7 @@ export function Shelf() {
       const slot = L.slots[i]
       hov.id = slot.id
       const el = els.get(slot.id)
-      if (el) { el.setAttribute('data-hover', ''); el.style.willChange = 'transform' }
+      if (el) { el.removeAttribute('data-pop'); el.setAttribute('data-hover', ''); el.style.willChange = 'transform' }
       // the row gives way: the swung box needs room on the side it turns toward (crowd.ts)
       hov.nb = MOTION.reduced ? [] : makeRoom(L.slots, i)
       let reach = 0
@@ -199,7 +275,10 @@ export function Shelf() {
       const hs = slotEl(slot.id)
       // the hit slot grows to cover the opened cover, so the pointer can rest on it
       if (hs) { hs.setAttribute('data-active', ''); hs.style.setProperty('--reach', `${reach.toFixed(1)}px`) }
-      if (source === 'mouse') sound.shff()
+      if (source === 'mouse') {
+        const now = performance.now()
+        if (now - hov.shffAt > 110) { sound.shff(); hov.shffAt = now }
+      }
       setLabel({ id: slot.id, focus: source === 'key', out: false })
     } else {
       hov.id = ''
@@ -269,18 +348,14 @@ export function Shelf() {
     if (press.current?.drag) return
     const s = slotOf(e.target)
     if (!s) return
-    const i = Number(s.dataset.i)
     cancelLeave()
-    if (s.dataset.id === hov.id) { hov.pending = -1; window.clearTimeout(hov.intent); return }
-    if (hov.pending === i) return
-    hov.pending = i
-    window.clearTimeout(hov.intent)
-    hov.intent = window.setTimeout(() => { if (hov.pending === i) applyHover(i, 'mouse') }, 60)
+    want(Number(s.dataset.i), 0)
   }
   const onPointerOut = (e: React.PointerEvent) => {
     if (!slotOf(e.target)) return
     const to = e.relatedTarget as HTMLElement | null
     if (to && (to.closest('.shelf__hit') || to.closest('.shelf__label'))) return
+    path.x = NaN
     hov.pending = -1
     window.clearTimeout(hov.intent)
     armLeave()
@@ -295,6 +370,7 @@ export function Shelf() {
     if (i >= 0) els.get(press.current.slotId)?.setAttribute('data-press', '')
   }
   const onPointerMove = (e: React.PointerEvent) => {
+    trackPath(e)
     const p = press.current
     if (!p || p.id !== e.pointerId) return
     if (!p.drag) {
@@ -305,6 +381,7 @@ export function Shelf() {
       hits.current?.setPointerCapture(e.pointerId)
       hits.current?.setAttribute('data-dragging', '')
       hov.pending = -1
+      path.x = NaN
       window.clearTimeout(hov.intent)
       if (hov.id && hov.source === 'mouse') applyHover(-1, 'mouse')
     }
@@ -412,7 +489,12 @@ export function Shelf() {
     if (t.classList?.contains('book') && !t.hasAttribute('data-hover') && !t.hasAttribute('data-pickup')) t.style.willChange = ''
   }
   const onRowAnimationEnd = (e: React.AnimationEvent) => {
-    if (e.animationName === 'book-dip') (e.target as HTMLElement).removeAttribute('data-dip')
+    const t = e.target as HTMLElement
+    if (e.animationName === 'book-dip') t.removeAttribute('data-dip')
+    // only the keyframes still on the element may clear it: a book crossed again mid-settle has
+    // already swapped to the other name, and that pop is still running
+    else if (e.animationName === 'book-pop-a' && t.getAttribute('data-pop') === 'a') t.removeAttribute('data-pop')
+    else if (e.animationName === 'book-pop-b' && t.getAttribute('data-pop') === 'b') t.removeAttribute('data-pop')
   }
 
   /* ---------- first position + greeting, layout sync ---------- */

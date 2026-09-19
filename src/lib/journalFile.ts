@@ -19,8 +19,9 @@
  * Browsers without the File System Access API (Safari, Firefox) cannot write to a file on their
  * own. There the journal is kept in the browser and *saved as a download* — one JSON file with the
  * media inside — when the user asks (Save journal, ⌘S), and opened again from the front page with
- * a file picker. The chrome shows when there are changes not yet saved to the file, and the tab
- * warns before closing on them.
+ * a file picker. The chrome shows when there are changes not yet saved to the file; the writing
+ * itself is never at risk, since the database holds it either way, so nothing here interrupts the
+ * browser to say so — the reminder is a toast inside the app (App.tsx).
  */
 import { db, dbEvents } from './db'
 import type { ExportFile, Entry, CustomSticker, Id, StoredImage } from '@/model/types'
@@ -113,9 +114,6 @@ function bindOnce() {
   dbEvents.subscribe(() => journalFile.markDirty())
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') void journalFile.flush() })
   window.addEventListener('pagehide', () => void journalFile.flush())
-  window.addEventListener('beforeunload', e => {
-    if (status.mode === 'download' && status.unsaved) { e.preventDefault(); e.returnValue = '' }
-  })
 }
 
 /* ---------- folder: write ---------- */
