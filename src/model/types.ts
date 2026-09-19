@@ -23,6 +23,8 @@ export const spineWidth = (pages: number, words: number) =>
 
 /* ---------- blocks ---------- */
 export type TextKind = 'title' | 'heading' | 'body' | 'quote' | 'caption'
+/** The whole text box's typeface: the book serif (default), a calligraphy script, or Space Mono. */
+export type TextFont = 'serif' | 'script' | 'mono'
 export type WrapMode = 'auto' | 'left' | 'right' | 'break' | 'behind' | 'front'
 
 interface BlockBase {
@@ -39,6 +41,7 @@ export interface TextBlock extends BlockBase {
   minH?: number // cells
   html: string // sanitized: p, br, strong, em, u, s, a[href], ul, ol, li
   align?: 'left' | 'center' | 'right'
+  font?: TextFont // default 'serif'
 }
 /** How the picture is cut out of its frame. 'rect' honours cornerRadius; the rest clip. */
 export type ImageShape = 'rect' | 'circle' | 'heart'
@@ -58,9 +61,18 @@ export interface ImageBlock extends BlockBase {
   objectScale?: number // 1..4 zoom inside the frame; default 1
   frame?: 'none' | 'polaroid'
   alt?: string
+  /** 'video': imageId points at a stored video (its thumb is the poster frame). Absent = a picture. */
+  media?: 'video'
+  /** videos only — 'auto' loops silently as soon as it is on screen; 'click' waits for a click and plays with sound */
+  playback?: VideoPlayback
 }
+export type VideoPlayback = 'auto' | 'click'
 export const IMAGE_ZOOM = { min: 1, max: 4 } as const
-export type StickerSource = { type: 'emoji'; char: string } | { type: 'svg'; id: string }
+export type StickerSource =
+  | { type: 'emoji'; char: string }
+  | { type: 'svg'; id: string }
+  /** one of your own stickers: a transparent PNG in the images store (entryId STICKER_LIBRARY) */
+  | { type: 'image'; imageId: Id }
 export interface StickerBlock extends BlockBase {
   type: 'sticker'
   source: StickerSource
@@ -85,6 +97,20 @@ export interface Cover {
   imageId?: Id // front-cover picture (stored in images with entryId; never GC'd while referenced)
   spine: 'title' | 'initial' | 'blank'
   thickness?: number // px spine width, user override; undefined = auto from stats via spineWidth()
+  /** blocks laid on the front cover (stickers, text, pictures), edited like a page at COVER_PAGE */
+  design?: Page
+}
+/** The page index the editor uses for the front cover's design. */
+export const COVER_PAGE = -1
+/** entryId of images that belong to the sticker library rather than to one entry (never GC'd). */
+export const STICKER_LIBRARY = '__stickers'
+export interface CustomSticker {
+  imageId: Id
+  /** px size of the stored PNG — sets the placed aspect */
+  width: number
+  height: number
+  cut: boolean
+  createdAt: Millis
 }
 
 /* ---------- entries ---------- */
@@ -131,8 +157,8 @@ export const DEFAULT_SETTINGS: Settings = {
 export interface StoredImage {
   id: Id
   entryId: Id
-  blob: Blob // <= 2048px
-  thumb: Blob // <= 480px jpeg
+  blob: Blob // <= 2048px picture, or the original video file
+  thumb: Blob // <= 480px jpeg (a video's poster frame)
   mime: string
   width: number
   height: number
@@ -145,6 +171,8 @@ export interface ExportFile {
   exportedAt: Millis
   entries: Entry[]
   images: { id: Id; entryId: Id; mime: string; width: number; height: number; base64: string }[]
+  /** your sticker library (full exports only) */
+  stickers?: CustomSticker[]
 }
 
 /* ---------- routing / handoffs ---------- */

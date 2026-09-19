@@ -187,6 +187,10 @@
 .ed-bubble__kind[data-kind="caption"] { font-size: 11px; }
 .ed-bubble__kind:focus { outline: none; }
 .ed-bubble__kind:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.ed-bubble__font { padding: 0 8px; font-size: 13px; }
+.ed-bubble__font[data-font="serif"] { font-family: var(--serif); }
+.ed-bubble__font[data-font="script"] { font-family: var(--font-script); font-size: 17px; }
+.ed-bubble__font[data-font="mono"] { font-family: var(--font-spacemono); font-size: 12px; }
 .ed-bubble__btn[data-cmd="strikeThrough"] .ed-chrome-glyph { transform: translateY(0.5px); }
 
 /* ---------- wrap picker ---------- */
@@ -205,6 +209,8 @@
 .ed-imgtb { padding: 4px; }
 .ed-imgtb__btn { color: var(--muted); }
 .ed-imgtb__btn:hover { color: var(--fg); }
+.ed-imgtb__play { width: auto; gap: 4px; padding: 0 8px 0 6px; }
+.ed-imgtb__playlabel { font-size: 12px; font-weight: 500; }
 .ed-imgtb__btn--danger:hover { color: var(--accent); background: var(--ed-accent-tint-soft); }
 
 .ed-imgtb__opacity {
@@ -346,6 +352,11 @@
   grid-template-columns: repeat(4, 1fr);
   gap: 4px;
   justify-items: center;
+  max-height: 264px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 2px;
+  scrollbar-width: thin;
 }
 .ed-stickers__grid--svg [data-tip]::after { bottom: calc(100% + 2px); }
 .ed-stickers__cell {
@@ -383,6 +394,102 @@
   font: 11.5px/1.35 var(--ui);
 }
 
+/* ---------- your own stickers ---------- */
+
+.ed-stickers__make {
+  color: var(--muted);
+  border: 1.5px dashed var(--rule);
+}
+.ed-stickers__make:hover { color: var(--fg); border-color: var(--muted); }
+.ed-stickers__mine { position: relative; display: inline-flex; }
+.ed-stickers__forget {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: var(--muted);
+  background: var(--ed-capsule-bg);
+  box-shadow: 0 0 0 1px var(--rule);
+  opacity: 0;
+  transition: opacity 120ms var(--ed-chrome-ease);
+}
+.ed-stickers__mine:hover .ed-stickers__forget,
+.ed-stickers__forget:focus-visible { opacity: 1; }
+.ed-stickers__forget:hover { color: var(--accent); }
+
+/* the maker: a centred card over a light scrim */
+.ed-stkmaker {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgba(20, 16, 12, 0.28);
+  animation: ed-fade-in 140ms ease both;
+}
+.ed-stkmaker__card {
+  width: min(460px, 100%);
+  padding: 18px;
+  border-radius: 14px;
+  background: var(--ed-capsule-bg);
+  border: 1px solid var(--rule);
+  box-shadow: var(--ed-capsule-shadow);
+  color: var(--fg);
+  font-family: var(--ui);
+  animation: ed-capsule-in var(--ed-chrome-in) var(--ed-chrome-ease) both;
+}
+.ed-stkmaker__title { margin: 0 0 14px; font: 600 15px/1.2 var(--ui); }
+.ed-stkmaker__opts { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.ed-stkmaker__opt {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  padding: 8px;
+  border-radius: 10px;
+  text-align: left;
+  box-shadow: 0 0 0 1px var(--rule);
+  transition: box-shadow 120ms var(--ed-chrome-ease), background-color 120ms var(--ed-chrome-ease);
+}
+.ed-stkmaker__opt:hover:not(:disabled) { background: var(--sel); }
+.ed-stkmaker__opt[aria-checked="true"] { box-shadow: 0 0 0 2px var(--accent); }
+.ed-stkmaker__opt:disabled { cursor: default; }
+.ed-stkmaker__opt:focus { outline: none; }
+.ed-stkmaker__opt:focus-visible { box-shadow: 0 0 0 2px var(--accent), 0 0 0 5px var(--ed-accent-tint); }
+.ed-stkmaker__preview {
+  display: grid;
+  place-items: center;
+  aspect-ratio: 1;
+  padding: 10px;
+  border-radius: 7px;
+  /* a soft checkerboard shows what became transparent */
+  background: repeating-conic-gradient(var(--code-bg) 0 25%, var(--paper) 0 50%) 0 0 / 16px 16px;
+}
+.ed-stkmaker__preview img { display: block; max-width: 100%; max-height: 100%; object-fit: contain; }
+.ed-stkmaker__working { color: var(--muted); font: italic 13px/1.3 var(--serif); text-align: center; }
+.ed-stkmaker__label { margin-top: 4px; font: 600 13px/1.2 var(--ui); }
+.ed-stkmaker__hint { color: var(--muted); font: 12px/1.3 var(--ui); }
+.ed-stkmaker__actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+.ed-stkmaker__btn {
+  height: 30px;
+  padding: 0 14px;
+  border-radius: 8px;
+  font: 500 13px/1 var(--ui);
+  color: var(--fg);
+  box-shadow: 0 0 0 1px var(--rule);
+}
+.ed-stkmaker__btn:hover:not(:disabled) { background: var(--sel); }
+.ed-stkmaker__btn--primary { color: #fff; background: var(--accent); box-shadow: none; }
+.ed-stkmaker__btn--primary:hover:not(:disabled) { background: var(--accent); filter: brightness(1.06); }
+.ed-stkmaker__btn:disabled { opacity: 0.5; }
+.ed-stkmaker__btn:focus { outline: none; }
+.ed-stkmaker__btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
 /* ---------- sticker artwork ---------- */
 
 .ed-sticker {
@@ -402,6 +509,14 @@
   font-style: normal;
   font-weight: 400;
   transform: translateY(0.04em);
+}
+
+.ed-sticker__img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  -webkit-user-drag: none;
 }
 
 /* ---------- dark theme touches ---------- */

@@ -4,7 +4,7 @@
  */
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb'
 import { useEffect, useState } from 'react'
-import type { Entry, ExportFile, Id, StoredImage } from '@/model/types'
+import { STICKER_LIBRARY, type CustomSticker, type Entry, type ExportFile, type Id, type StoredImage } from '@/model/types'
 import { nanoid } from './ids'
 import { readImageSize } from './imageSize'
 
@@ -98,6 +98,8 @@ async function fullCopy(file: Blob, bmp: ImageBitmap) {
 
 export interface ImageDraft {
   id: Id
+  /** set when the file is a video: the block plays the stored file over its poster frame */
+  media?: 'video'
   /** EXIF-corrected pixel size of the source — the aspect the block is laid out at */
   width: number
   height: number
@@ -107,6 +109,47 @@ export interface ImageDraft {
 
 export class ImageTooLargeError extends Error {}
 export class NotAnImageError extends Error {}
+
+/** Pictures and videos are both placeable; everything else is turned away at the door. */
+export const isMediaFile = (f: Blob) => f.type.startsWith('image/') || f.type.startsWith('video/')
+const MAX_VIDEO_BYTES = 250 * 1024 * 1024
+
+/**
+ * Pixel size and a <=480px JPEG poster of a video, read by letting the browser decode its first
+ * frame. Rejects with NotAnImageError when the browser can't play the file (e.g. HEVC on Chrome).
+ */
+function videoPoster(file: Blob): Promise<{ width: number; height: number; poster: Blob }> {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file)
+    const v = document.createElement('video')
+    v.muted = true
+    v.playsInline = true
+    v.preload = 'auto'
+    const done = () => { window.clearTimeout(timer); v.removeAttribute('src'); v.load(); URL.revokeObjectURL(url) }
+    const fail = () => { done(); reject(new NotAnImageError('unplayable video')) }
+    const timer = window.setTimeout(fail, 15000)
+    v.onerror = fail
+    v.onloadeddata = () => {
+      // a frame a little way in: the very first one is often black
+      v.currentTime = Math.min(0.5, (v.duration || 0) / 2)
+    }
+    v.onseeked = async () => {
+      try {
+        const width = v.videoWidth
+        const height = v.videoHeight
+        if (!width || !height) return fail()
+        const r = Math.min(1, THUMB_SIDE / Math.max(width, height))
+        const c = makeCanvas(Math.max(1, Math.round(width * r)), Math.max(1, Math.round(height * r)))
+        const ctx = c.getContext('2d') as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D
+        ctx.drawImage(v, 0, 0, c.width, c.height)
+        const poster = await toBlob(c, 'image/jpeg', 0.8)
+        done()
+        resolve({ width, height, poster })
+      } catch { fail() }
+    }
+    v.src = url
+  })
+}
 
 export const db = {
   async loadAll(): Promise<{ entries: Entry[]; settings: unknown; kv: Record<string, unknown> }> {
@@ -190,6 +233,36 @@ export const db = {
     })()
     return { id, width: size.width, height: size.height, stored }
   },
+  /**
+   * A video is stored as-is (no re-encode) with a poster frame in the thumb slot. The poster is read
+   * before the block is placed — it gives the frame its aspect — and the write runs behind it.
+   */
+  async prepareVideo(file: Blob, entryId: Id): Promise<ImageDraft> {
+    if (!file.type.startsWith('video/')) throw new NotAnImageError('not a video')
+    if (file.size > MAX_VIDEO_BYTES) throw new ImageTooLargeError('too large')
+    const id = nanoid(12)
+    const { width, height, poster } = await videoPoster(file)
+    imageUrls.prime(id, 'thumb', poster)
+    imageUrls.prime(id, 'full', file)
+    void imageUrls.acquire(id, 'thumb')
+    void imageUrls.acquire(id, 'full')
+    const stored = (async () => {
+      try {
+        const rec: StoredImage = { id, entryId, blob: file, thumb: poster, mime: file.type, width, height, bytes: file.size, createdAt: Date.now() }
+        const d = await open()
+        await d.put('images', rec)
+        return rec
+      } finally {
+        imageUrls.release(id, 'thumb')
+        imageUrls.release(id, 'full')
+      }
+    })()
+    return { id, media: 'video', width, height, stored }
+  },
+  /** Picture or video, whichever the file is. */
+  prepareMedia(file: Blob, entryId: Id): Promise<ImageDraft> {
+    return file.type.startsWith('video/') ? db.prepareVideo(file, entryId) : db.prepareImage(file, entryId)
+  },
   /** prepareImage, awaited to completion. Kept for callers that need the persisted record. */
   async importImage(file: Blob, entryId: Id): Promise<StoredImage> {
     return (await db.prepareImage(file, entryId)).stored
@@ -215,7 +288,7 @@ export const db = {
     const d = await open()
     const used = new Set<Id>()
     if (entry.cover.imageId) used.add(entry.cover.imageId)
-    for (const p of entry.pages) for (const b of p.blocks) if (b.type === 'image') used.add(b.imageId)
+    for (const p of entry.cover.design ? [...entry.pages, entry.cover.design] : entry.pages) for (const b of p.blocks) if (b.type === 'image') used.add(b.imageId)
     const keys = await d.getAllKeysFromIndex('images', 'byEntry', entry.id)
     for (const k of keys) if (!used.has(k)) await d.delete('images', k)
   },
@@ -228,7 +301,14 @@ export const db = {
       const recs = await d.getAllFromIndex('images', 'byEntry', e.id)
       for (const r of recs) images.push({ id: r.id, entryId: r.entryId, mime: r.mime, width: r.width, height: r.height, base64: await blobToBase64(r.blob) })
     }
-    return { format: 'folio', version: 1, exportedAt: Date.now(), entries, images }
+    // your own stickers live outside any entry: carry the whole library on a full export, and on a
+    // partial one the stickers those entries use
+    const lib = await d.getAllFromIndex('images', 'byEntry', STICKER_LIBRARY)
+    const used = new Set<Id>()
+    for (const e of entries) for (const p of e.cover.design ? [...e.pages, e.cover.design] : e.pages) for (const b of p.blocks) if (b.type === 'sticker' && b.source.type === 'image') used.add(b.source.imageId)
+    for (const r of lib) if (!entryIds || used.has(r.id)) images.push({ id: r.id, entryId: r.entryId, mime: r.mime, width: r.width, height: r.height, base64: await blobToBase64(r.blob) })
+    const stickers = entryIds ? undefined : ((await d.get('kv', 'stickers')) as CustomSticker[] | undefined)
+    return { format: 'folio', version: 1, exportedAt: Date.now(), entries, images, ...(stickers?.length ? { stickers } : null) }
   },
   /** Import a Folio export. Entries with the same id are replaced. Returns imported entries. */
   async importJSON(data: ExportFile): Promise<Entry[]> {
@@ -236,13 +316,45 @@ export const db = {
     const d = await open()
     for (const img of data.images) {
       const blob = base64ToBlob(img.base64, img.mime)
-      const bmp = await decode(blob)
-      const thumb = await scaled(bmp, THUMB_SIDE, 'image/jpeg', 0.8)
-      bmp.close?.()
+      let thumb: { blob: Blob }
+      if (img.mime.startsWith('video/')) {
+        thumb = { blob: (await videoPoster(blob)).poster }
+      } else {
+        const bmp = await decode(blob)
+        thumb = await scaled(bmp, THUMB_SIDE, 'image/jpeg', 0.8)
+        bmp.close?.()
+      }
       await d.put('images', { id: img.id, entryId: img.entryId, blob, thumb: thumb.blob, mime: img.mime, width: img.width, height: img.height, bytes: blob.size, createdAt: Date.now() })
     }
     for (const e of data.entries) await d.put('entries', e)
+    if (data.stickers?.length) {
+      const mine = ((await d.get('kv', 'stickers')) as CustomSticker[] | undefined) ?? []
+      const have = new Set(mine.map(s => s.imageId))
+      await d.put('kv', [...mine, ...data.stickers.filter(s => !have.has(s.imageId))], 'stickers')
+    }
     return data.entries
+  },
+  /* ---------- your own stickers ----------
+   * A PNG per sticker in the images store under entryId STICKER_LIBRARY (so no entry's GC touches
+   * it), listed newest-first in kv 'stickers'. Removing one from the list leaves the PNG in place:
+   * stickers already stuck on pages keep showing. */
+  async listStickers(): Promise<CustomSticker[]> {
+    return ((await db.getKV<CustomSticker[]>('stickers')) ?? []).slice()
+  },
+  async addSticker(png: Blob, width: number, height: number, cut: boolean): Promise<CustomSticker> {
+    const id = nanoid(12)
+    const bmp = await decode(png)
+    const thumb = await scaled(bmp, THUMB_SIDE, canWebp() ? 'image/webp' : 'image/png', 0.9)
+    bmp.close?.()
+    const d = await open()
+    await d.put('images', { id, entryId: STICKER_LIBRARY, blob: png, thumb: thumb.blob, mime: png.type, width, height, bytes: png.size, createdAt: Date.now() })
+    imageUrls.prime(id, 'full', png)
+    const s: CustomSticker = { imageId: id, width, height, cut, createdAt: Date.now() }
+    await db.putKV('stickers', [s, ...(await db.listStickers())])
+    return s
+  },
+  async removeSticker(imageId: Id) {
+    await db.putKV('stickers', (await db.listStickers()).filter(s => s.imageId !== imageId))
   },
   async wipe() {
     const d = await open()

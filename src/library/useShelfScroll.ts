@@ -4,13 +4,18 @@
  * fires detents (sound + a visual dip), and owns every other way scrollLeft can move: vertical
  * mouse-wheel glide, mouse drag with momentum, and programmatic tweens (silent — no ticks).
  * Nothing here touches React per frame; state changes only when the integer window changes.
+ *
+ * The scroller's travel is bounded to the row itself (layout.ts scrollRange): the track carries
+ * --row-w = travel and content x == range.base + scrollLeft, so a row that fits the viewport sits
+ * centred with no travel at all and neither end can ever be dragged out into empty wall. Every
+ * method below speaks content x; the base is added and subtracted here and nowhere else.
  */
 import { useEffect, useRef, type MutableRefObject, type RefObject } from 'react'
 import { MOTION } from '@/feel/motion'
 import { sound } from '@/feel/sound'
 import { easeOutExpo, tween } from '@/feel/spring'
 import { useStore } from '@/model/store'
-import { OVERSCAN, PLANK_SEG, clamp, lowerBound, nearestSlot, type ShelfLayout } from './layout'
+import { OVERSCAN, PLANK_SEG, clamp, lowerBound, nearestSlot, scrollRange, type ShelfLayout } from './layout'
 
 export interface ShelfWindow { first: number; last: number; pk0: number; pk1: number }
 
@@ -30,8 +35,10 @@ export interface ScrollHandlers {
 }
 
 export interface ShelfScroll {
+  /** content x on the focus line */
   x(): number
   vw(): number
+  /** the scroller's travel in px (0 when the whole row fits) */
   max(): number
   /** run the frame now (windowing + transforms); used after layout changes and for sync mounts */
   sync(): void
@@ -50,6 +57,8 @@ export interface ShelfScroll {
 export function useShelfScroll(o: {
   root: RefObject<HTMLElement>
   scroller: RefObject<HTMLElement>
+  /** the in-flow spacer whose --row-w is the scroller's travel */
+  track: RefObject<HTMLElement>
   layers: RefObject<HTMLElement>[]
   layout: MutableRefObject<ShelfLayout>
   handlers: ScrollHandlers
@@ -60,6 +69,7 @@ export function useShelfScroll(o: {
     x: 0, prevX: 0, prevT: 0, vw: 0,
     raf: 0, idle: 0, active: false,
     silent: 0, lastTick: -1e9, lastNear: -1,
+    base: 0, travel: 0,
     win: { first: -1, last: -1, pk0: 0, pk1: -1 } as ShelfWindow,
     cancelTween: null as null | (() => void),
     glideTarget: 0, gliding: false, glideRaf: 0,
@@ -70,13 +80,34 @@ export function useShelfScroll(o: {
   if (!ctrl.current) {
     const sc = () => o.scroller.current
     const maxScroll = () => { const s = sc(); return s ? Math.max(0, s.scrollWidth - s.clientWidth) : 0 }
+    /** content x -> scrollLeft, clamped to what the row actually allows */
+    const toScroll = (x: number) => clamp(x - st.base, 0, maxScroll())
+
+    /**
+     * Re-derive the travel from the row width and the viewport, write it to the track, and keep the
+     * focus line on the same content x across the change (a new book, a resize).
+     */
+    const applyRange = () => {
+      const s = sc()
+      const t = o.track.current
+      if (!s || !t) return
+      const held = st.base + s.scrollLeft
+      const r = scrollRange(o.layout.current.width, st.vw)
+      if (r.base !== st.base || r.travel !== st.travel) {
+        st.base = r.base
+        st.travel = r.travel
+        t.style.setProperty('--row-w', `${r.travel}px`)
+      }
+      const want = clamp(held - st.base, 0, r.travel)
+      if (Math.abs(s.scrollLeft - want) > 0.5) { s.scrollLeft = want; st.prevX = st.base + s.scrollLeft }
+    }
 
     const frame = () => {
       st.raf = 0
       const s = sc()
       if (!s) return
       const now = performance.now()
-      const x = s.scrollLeft
+      const x = st.base + s.scrollLeft
       const t = `translate3d(${-x}px,0,0)`
       for (const l of o.layers) if (l.current) l.current.style.transform = t
       const L = o.layout.current
@@ -151,13 +182,14 @@ export function useShelfScroll(o: {
       x: () => st.x,
       vw: () => st.vw,
       max: maxScroll,
-      sync() { if (st.raf) cancelAnimationFrame(st.raf); frame() },
+      sync() { applyRange(); if (st.raf) cancelAnimationFrame(st.raf); frame() },
       jumpTo(x) {
         const s = sc()
         if (!s) return
         cancelAll()
-        s.scrollLeft = clamp(x, 0, maxScroll())
-        st.prevX = s.scrollLeft // no crossings for a jump
+        applyRange()
+        s.scrollLeft = toScroll(x)
+        st.prevX = st.base + s.scrollLeft // no crossings for a jump
         this.sync()
       },
       scrollTo(x, opts) {
@@ -165,7 +197,7 @@ export function useShelfScroll(o: {
         if (!s) return
         cancelAll()
         const from = s.scrollLeft
-        const to = clamp(x, 0, maxScroll())
+        const to = toScroll(x)
         if (Math.abs(from - to) < 0.5) { opts?.onDone?.(); return }
         st.silent++
         let released = false
@@ -181,7 +213,7 @@ export function useShelfScroll(o: {
         const s = sc()
         if (!s) return
         cancelAll()
-        s.scrollLeft = clamp(x, 0, maxScroll())
+        s.scrollLeft = toScroll(x)
       },
       beginDrag(clientX) {
         const s = sc()
@@ -223,7 +255,7 @@ export function useShelfScroll(o: {
         st.idle = window.setTimeout(() => {
           st.active = false
           hRef.current.onActivity(false)
-          hRef.current.onScrollEnd(s.scrollLeft)
+          hRef.current.onScrollEnd(st.base + s.scrollLeft) // content x: the base moves with the viewport
         }, 900)
       }
       const onWheel = (e: WheelEvent) => {
@@ -250,11 +282,13 @@ export function useShelfScroll(o: {
         const w = entries[0]?.contentRect.width ?? s.clientWidth
         st.vw = w
         root?.style.setProperty('--vw', `${Math.round(w)}px`)
+        applyRange()
         schedule()
       })
       ro.observe(s)
       st.vw = s.clientWidth
       root?.style.setProperty('--vw', `${Math.round(st.vw)}px`)
+      applyRange()
       return () => {
         s.removeEventListener('scroll', onScroll)
         s.removeEventListener('wheel', onWheel)

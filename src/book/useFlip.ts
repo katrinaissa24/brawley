@@ -1,20 +1,22 @@
 /**
- * Flip controller: owns every 3D variable on the sheets (--a and --ax on the sheet + its two shades
+ * Flip controller: owns every 3D variable on the sheets (--a on the sheet + its two shades
  * + the two cast elements of its slot, data-live, data-flipping), the page mesh of a turning sheet
  * and the closed-block thickness. JS-driven in rAF (drag mapping, spring landing, spring flip);
  * CSS derives the flat-sheet shading from --a. React never touches these.
  *
  * Paper, not plastic. Three things make a turn read as a sheet of paper rather than a hinged card:
- *   · it bends. A turning sheet becomes a mesh of vertical strips hinged edge to edge (`mesh.ts`)
- *     whose curve follows the sheet's own motion through an underdamped spring — so the body hangs
- *     from the finger that drags it, the fore-edge trails a flick, and the page slaps down and
- *     settles after the gutter has landed. --a is the gutter's angle; the cast shadow beneath
- *     follows the chord to the fore-edge instead, which is where the page actually is.
+ *   · it bends. A turning sheet becomes a mesh of strips (`mesh.ts`) hinged edge to edge along the
+ *     lines the paper folds about, the first of which is the bound edge itself, whose curve follows
+ *     the sheet's own motion through an underdamped spring — so the body hangs from the finger that
+ *     drags it, the fore-edge trails a flick, and the page slaps down and settles after the gutter
+ *     has landed. --a is the gutter's angle; the cast shadow beneath follows the chord to the
+ *     fore-edge instead, which is where the page actually is.
  *   · it carries momentum. Every flip is a spring, not a fixed tween: a flick throws the page and it
  *     lands hard, a slow drag sets it down slowly, and the release velocity decides which way it goes.
- *   · you can take it by the corner. Grabbing near the head or tail tilts the hinge axis (--ax) so
- *     that corner leads and the sheet folds diagonally; the tilt decays to zero by the end of the
- *     turn, because only a rotation about the gutter can leave the page lying flat.
+ *   · you can take it by the corner. Grabbing near the head or tail leans the mesh's ruling lines
+ *     so that corner leads and the sheet folds diagonally. The lean is in the paper, not in the
+ *     hinge: the sheet only ever turns about the gutter, so the whole bound edge stays on the book
+ *     for the length of the turn and the page still ends up lying flat.
  *
  * Spread model: cur = -1 means the book is closed (cover at 0deg); cur >= 0 is the visible spread.
  * A forward flip turns sheet `target` (the right page's sheet); a backward flip turns sheet `target - 1`.
@@ -46,8 +48,6 @@ interface Flight {
   extra?: (a: number) => void
   /** the bending strips of this sheet, while it is in the air */
   rig: MeshRig | null
-  /** where along the head-tail axis the sheet was taken: -1 head, 0 middle, +1 tail */
-  grab: number
 }
 interface Drag { f: Flight; spineX: number; r: number; x0: number; y0: number; pointerId: number; samples: [number, number][] }
 /** A mesh still settling on a sheet that has already landed (the flight is over; the paper is not). */
@@ -59,8 +59,6 @@ const SETTLE_MAX_MS = 700
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v))
 const D2R = Math.PI / 180
-/** How far a corner grab leans the hinge axis at the deepest point of the turn. */
-const AXIS_TILT = 0.34
 /** Velocity is read over this window, so a pause before letting go really does mean "let it down". */
 const VELOCITY_WINDOW = 110 // ms
 
@@ -127,11 +125,8 @@ export class FlipController {
     f.a = a
     let chord = a
     if (f.rig) {
-      const arc = writeMesh(f.rig, a, f.dir, performance.now())
+      writeMesh(f.rig, a, f.dir, performance.now())
       chord = a + f.rig.tip
-      // a tilted hinge is only legal mid-turn: at either end nothing but a gutter rotation leaves
-      // the sheet lying flat, so the tilt is scaled by the same arc as the bow
-      if (f.grab) f.els.root.style.setProperty('--ax', (AXIS_TILT * f.grab * Math.sqrt(arc)).toFixed(4))
     }
     this.writeVars(f.els, f.unders, a, chord)
     f.extra?.(a)
@@ -181,11 +176,13 @@ export class FlipController {
     // not worth a mesh per sheet) get the flat hinge too. A mesh still settling on this sheet from
     // its last landing is taken down first: the new one starts from flat.
     this.unsettle(els.root)
-    const rig = k >= 0 && !MOTION.reduced && opts.bend !== false ? buildMesh(els.root) : null
+    // the grab leans the mesh's rulings, and it does so for the whole turn: the fan is a property
+    // of the sheet, so it is settled here rather than driven frame by frame
+    const rig = k >= 0 && !MOTION.reduced && opts.bend !== false ? buildMesh(els.root, opts.grab ?? 0) : null
     const f: Flight = {
       k, dir, a, slot, els, unders,
       silent: !!opts.silent, gated: !!opts.gated, lifted: false, landed: false, cancel: null,
-      rig, grab: rig ? (opts.grab ?? 0) : 0,
+      rig,
     }
     if (rig) { rig.lastA = a; rig.lastT = 0 }
     els.root.dataset.flipping = String(slot)
@@ -202,7 +199,6 @@ export class FlipController {
     this.settle(f)
     delete f.els.root.dataset.flipping
     f.els.root.style.willChange = ''
-    f.els.root.style.removeProperty('--ax')
     this.inFlight.splice(this.inFlight.indexOf(f), 1)
     if (result === 'commit') this.cur += f.dir
     else this.target -= f.dir

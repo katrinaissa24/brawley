@@ -2,7 +2,7 @@
  * Image toolbar: a paper capsule floating 6px below the selected picture with the wrap picker, the
  * shape picker (square / rounded / circle / heart), a reframe toggle that turns drags inside the
  * picture into panning (plus a zoom slider while it is on), an opacity slider (only for 'behind'),
- * the polaroid frame toggle, Replace and Remove. Appears 60ms after mount (never during a gesture —
+ * the polaroid frame toggle, for a video the autoplay / click-to-play toggle, Replace and Remove. Appears 60ms after mount (never during a gesture —
  * the core mounts it once the selection settles). Keys 1–4 set the wrap mode while mounted.
  */
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
@@ -58,6 +58,9 @@ export function ImageToolbar({ block, anchor, onChange, onReplace, onRemove, ref
   const key = shapeKey(shape, radius)
   const polaroid = block.frame === 'polaroid'
   const behind = block.wrapMode === 'behind'
+  const video = block.media === 'video'
+  const auto = (block.playback ?? 'auto') === 'auto'
+  const V = C.video
 
   /** Circle and heart read as themselves only in a square frame, so squaring up comes with them. */
   const onShape = (patch: { shape: ImageShape; cornerRadius: number }) => {
@@ -71,7 +74,7 @@ export function ImageToolbar({ block, anchor, onChange, onReplace, onRemove, ref
   }
 
   return (
-    <FloatingCapsule anchor={anchor} place="below" gap={6} className="ed-imgtb" role="toolbar" label={C.label} allowInputFocus>
+    <FloatingCapsule anchor={anchor} place="below" gap={6} className="ed-imgtb" role="toolbar" label={video ? V.label : C.label} allowInputFocus>
       <WrapPicker value={block.wrapMode} onChange={m => onChange({ wrapMode: m })} />
       <span className="ed-chrome-sep" aria-hidden="true" />
       <ShapePicker value={key} radius={radius || 8} onChange={onShape} />
@@ -108,16 +111,39 @@ export function ImageToolbar({ block, anchor, onChange, onReplace, onRemove, ref
           </Glyph>
         </button>
       )}
+      {video && !reframing && (
+        <button
+          type="button"
+          className="ed-imgtb__btn ed-chrome-btn ed-imgtb__play"
+          aria-label={auto ? V.autoplay : V.clickToPlay}
+          data-tip={auto ? V.autoplay : V.clickToPlay}
+          onClick={() => onChange({ playback: auto ? 'click' : 'auto' })}
+        >
+          {auto ? (
+            <Glyph>
+              <path d="M3 9a6 6 0 0 1 10.3-4.2M15 9a6 6 0 0 1-10.3 4.2" />
+              <path d="M13.6 2.2v2.9h-2.9M4.4 15.8v-2.9h2.9" />
+              <path d="M7.6 6.8v4.4L11.2 9z" fill="currentColor" stroke="none" />
+            </Glyph>
+          ) : (
+            <Glyph>
+              <circle cx="9" cy="9" r="6.5" />
+              <path d="M7.5 6.3v5.4L11.8 9z" fill="currentColor" stroke="none" />
+            </Glyph>
+          )}
+          <span className="ed-imgtb__playlabel">{auto ? V.short.auto : V.short.click}</span>
+        </button>
+      )}
       {behind && !reframing && <OpacitySlider key={block.id} value={block.opacity ?? 0.7} onChange={v => onChange({ opacity: v })} />}
       <span className="ed-chrome-sep" aria-hidden="true" />
-      <button type="button" className="ed-imgtb__btn ed-chrome-btn" aria-label={C.replace} data-tip={C.replace} onClick={onReplace}>
+      <button type="button" className="ed-imgtb__btn ed-chrome-btn" aria-label={video ? V.replace : C.replace} data-tip={video ? V.replace : C.replace} onClick={onReplace}>
         <Glyph>
           <rect x="2.5" y="3" width="13" height="12" rx="1.5" />
           <path d="M2.5 12.5 6.5 8.5l3 3 2-2 4 4" />
           <circle cx="11.5" cy="6.5" r="1.2" fill="currentColor" stroke="none" />
         </Glyph>
       </button>
-      <button type="button" className="ed-imgtb__btn ed-imgtb__btn--danger ed-chrome-btn" aria-label={C.remove} data-tip={C.remove} onClick={onRemove}>
+      <button type="button" className="ed-imgtb__btn ed-imgtb__btn--danger ed-chrome-btn" aria-label={video ? V.remove : C.remove} data-tip={video ? V.remove : C.remove} onClick={onRemove}>
         <Glyph>
           <path d="M3.5 5h11M7 5V3.5h4V5M5 5l.7 9.5h6.6L13 5M7.6 7.5v5M10.4 7.5v5" />
         </Glyph>

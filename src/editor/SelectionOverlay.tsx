@@ -5,6 +5,8 @@
  * travels (160ms FLIP via a transition on the registered vars) instead of blinking. Eight handles
  * fade in with a 30ms clockwise stagger. A text block being edited shows a hairline only;
  * once Escaped it shows the frame, its width/min-height handles and top/bottom move strips.
+ * Pictures and stickers also carry four invisible rotate zones just outside the corners (and the
+ * ring above the top edge): reach past a corner and the block turns, detenting every 15°.
  */
 import { useLayoutEffect, useRef } from 'react'
 import { PITCH, type Block, type Id } from '@/model/types'
@@ -13,6 +15,7 @@ import type { EditorSession } from './session'
 
 export type Handle = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w'
 const CLOCKWISE: Handle[] = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w']
+const CORNERS: Handle[] = ['nw', 'ne', 'se', 'sw']
 const HANDLES: Record<Block['type'], Handle[]> = {
   image: CLOCKWISE,
   sticker: ['nw', 'ne', 'se', 'sw'],
@@ -83,7 +86,13 @@ export function SelectionOverlay({ session, blocks, selection, editingId }: Sele
         </>
       )}
       {!editing && !block.locked && block.type !== 'text' && (
-        <i className="ed-sel__rot" data-handle="rotate" data-for={block.id} aria-label={S.editor.a11y.rotate} />
+        <>
+          {/* before the resize handles in the DOM, so a corner handle still wins the corner itself */}
+          {CORNERS.map(c => (
+            <i key={block.id + 'rot' + c} className="ed-sel__rotz" data-handle="rotate" data-corner={c} data-for={block.id} aria-hidden="true" />
+          ))}
+          <i className="ed-sel__rot" data-handle="rotate" data-for={block.id} aria-label={S.editor.a11y.rotate} />
+        </>
       )}
       {!block.locked &&
         handles.map(h => (

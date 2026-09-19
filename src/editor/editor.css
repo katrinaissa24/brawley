@@ -127,6 +127,15 @@
 .ed-text s { text-decoration-color: var(--muted); }
 
 /* kinds (DESIGN §3) */
+/* typeface picked for the whole box; the script runs large so it reads like handwriting, not a footnote */
+.ed-block--text[data-font="script"] .ed-text { font-family: var(--font-script); font-size: 1.45em; letter-spacing: 0; --lh: 1.3; }
+.ed-block--text[data-font="script"] .ed-text[data-kind="title"] { font-size: 3.6em; font-weight: 400; }
+.ed-block--text[data-font="script"] .ed-text[data-kind="heading"] { font-size: 2.1em; font-weight: 400; }
+.ed-block--text[data-font="script"] .ed-text[data-kind="caption"] { font-size: 21px; }
+.ed-block--text[data-font="mono"] .ed-text { font-family: var(--font-spacemono); font-size: 0.86em; letter-spacing: -0.01em; }
+.ed-block--text[data-font="mono"] .ed-text[data-kind="title"] { font-size: 2.1em; letter-spacing: -0.03em; }
+.ed-block--text[data-font="mono"] .ed-text[data-kind="heading"] { font-size: 1.25em; }
+.ed-block--text[data-font="mono"] .ed-text[data-kind="caption"] { font-size: 13px; }
 .ed-text[data-kind="title"] { font-size: 2.6em; font-weight: 700; letter-spacing: -0.02em; --lh: 1.15; }
 .ed-text[data-kind="heading"] { font-size: 1.45em; font-weight: 700; letter-spacing: -0.01em; --lh: 1.25; }
 .ed-text[data-kind="title"] p, .ed-text[data-kind="heading"] p { margin-bottom: 0.2em; }
@@ -178,6 +187,38 @@
 .ed-block--image[data-frame="polaroid"] .ed-img { border-radius: 1px; }
 .ed-doc[data-mode="edit"] .ed-block--image { cursor: grab; }
 .ed-doc[data-mode="edit"] .ed-block--image.is-dragging { cursor: grabbing; }
+
+/* ---------- videos ----------
+   The play button sits in the middle of the frame and stays clickable in the read-only book too;
+   while playing it steps back and only comes forward again on hover. */
+.ed-vid-play {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 52px;
+  height: 52px;
+  margin: -26px 0 0 -26px;
+  display: grid;
+  place-items: center;
+  padding: 0 0 0 2px;
+  border: 0;
+  border-radius: 50%;
+  color: #fff;
+  background: rgba(20, 16, 12, 0.5);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
+  cursor: pointer;
+  pointer-events: auto;
+  z-index: 1;
+  transition: opacity 180ms ease, transform 180ms ease;
+}
+.ed-vid-play[data-playing] { padding: 0; opacity: 0; }
+.ed-block--image:hover .ed-vid-play[data-playing],
+.ed-vid-play:focus-visible { opacity: 1; }
+.ed-vid-play:hover { transform: scale(1.06); }
+.ed-vid-play:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.ed-block--image[data-crop] .ed-vid-play { display: none; }
 
 /* ---------- picture shapes ----------
    Percentage clip geometry, so a shape survives any resize. The polaroid frame keeps its own
@@ -384,6 +425,26 @@
 .ed-sel__edge[data-edge="n"] { top: -9px; }
 .ed-sel__edge[data-edge="s"] { bottom: -9px; }
 
+/* corner rotation zones: reach just past a corner and the block turns. Invisible on purpose —
+   the cursor is the affordance — and they sit under the resize handles, which keep the corners. */
+.ed-sel__rotz {
+  position: absolute;
+  width: 30px;
+  height: 30px;
+  pointer-events: auto;
+  cursor: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='26' height='26' viewBox='0 0 26 26'><g fill='none' stroke='white' stroke-width='4' stroke-linecap='round' stroke-linejoin='round'><path d='M19 9.5A7.5 7.5 0 1 0 20.5 14'/><path d='M20.5 5v5h-5'/></g><g fill='none' stroke='black' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'><path d='M19 9.5A7.5 7.5 0 1 0 20.5 14'/><path d='M20.5 5v5h-5'/></g></svg>") 13 13, grab;
+}
+.ed-sel__rotz[data-corner="nw"] { left: -30px; top: -30px; }
+.ed-sel__rotz[data-corner="ne"] { left: 100%; top: -30px; }
+.ed-sel__rotz[data-corner="se"] { left: 100%; top: 100%; }
+.ed-sel__rotz[data-corner="sw"] { left: -30px; top: 100%; }
+.ed-sel.is-dragging .ed-sel__rotz { pointer-events: none; }
+/* the nearest corner handle answers the hover, so the zone reads as part of that corner */
+.ed-sel__rotz[data-corner="nw"]:hover ~ .ed-sel__h[data-handle="nw"],
+.ed-sel__rotz[data-corner="ne"]:hover ~ .ed-sel__h[data-handle="ne"],
+.ed-sel__rotz[data-corner="se"]:hover ~ .ed-sel__h[data-handle="se"],
+.ed-sel__rotz[data-corner="sw"]:hover ~ .ed-sel__h[data-handle="sw"] { transform: scale(1.25); }
+
 /* rotation handle: a small ring above the top edge */
 .ed-sel__rot {
   position: absolute;
@@ -570,6 +631,18 @@
   box-shadow: var(--ed-page-shadow);
   transform-origin: 0 0;
 }
+.ed-page[data-cover] { background: var(--cover-hex); }
+.ed-page[data-cover] .ed-dots { opacity: 0.35; }
+.ed-coverbg { position: absolute; left: 0; top: 0; width: 816px; height: 1152px; overflow: hidden; pointer-events: none; }
+.ed-coverbg__img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+/* the book's title band, at the page grid's scale (the book draws it at 22px on a 480px-wide face) */
+.ed-coverbg__band {
+  position: absolute; left: 9%; right: 9%; top: 22%; padding: 24px 28px;
+  background: color-mix(in srgb, var(--cover-deep) 88%, var(--fg)); color: var(--cover-ink);
+  font: 700 37px/1.2 var(--serif); letter-spacing: -0.01em; text-align: center;
+  border-radius: 3px; overflow-wrap: anywhere;
+}
+.ed-coverbg__band.-empty { font-style: italic; font-weight: 400; opacity: 0.8; }
 .ed-scaled {
   position: absolute;
   left: 0;

@@ -51,10 +51,11 @@ export function useImageImport(session: EditorSession) {
       const spot = placeFor(place)
       setPending(p => [...p, { key, x: spot.x, y: spot.y, w: DEFAULT_IMAGE_W, h: 12 }])
       try {
-        const draft = await db.prepareImage(file, session.entryId)
+        const draft = await db.prepareMedia(file, session.entryId)
         draft.stored.catch(() => { if (alive.current) useStore.getState().toast(S.editor.image.failed) })
         if (!alive.current) return
         const block = newImageBlock(draft.id, draft.width, draft.height, placeFor(place, Math.round((DEFAULT_IMAGE_W * draft.height) / Math.max(1, draft.width))))
+        if (draft.media) { block.media = draft.media; block.playback = 'auto' }
         session.justAdded.add(block.id)
         session.commit(e => addBlock(e, session.pageIndex, block))
         added.push(block.id)
@@ -74,13 +75,16 @@ export function useImageImport(session: EditorSession) {
   const replaceImage = useCallback(async (blockId: Id, file: File) => {
     const st = useStore.getState()
     try {
-      const draft = await db.prepareImage(file, session.entryId)
+      const draft = await db.prepareMedia(file, session.entryId)
       draft.stored.catch(() => { if (alive.current) useStore.getState().toast(S.editor.image.failed) })
       if (!alive.current) return
       session.commit(e => updateBlock<ImageBlock>(e, session.pageIndex, blockId, b => {
         const h = Math.max(2, Math.min(CONTENT.rows, Math.round((b.w * draft.height) / Math.max(1, draft.width))))
         const y = Math.min(b.y, CONTENT_MAX_Y - h)
-        return { ...b, imageId: draft.id, naturalW: draft.width, naturalH: draft.height, h, y, objectPosition: undefined, objectScale: undefined }
+        return {
+          ...b, imageId: draft.id, naturalW: draft.width, naturalH: draft.height, h, y, objectPosition: undefined, objectScale: undefined,
+          media: draft.media, playback: draft.media ? b.playback ?? 'auto' : undefined,
+        }
       }))
     } catch (err) {
       if (!alive.current) return

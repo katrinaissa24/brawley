@@ -6,11 +6,13 @@
  * data-shape cuts the frame (rounded rect · circle · heart). While the block is the store's
  * croppingBlockId a drag inside it pans the picture within that frame and the wheel zooms, both
  * written straight to the element and committed once on release — the block itself never moves.
+ * A block with media 'video' paints a <video> in the same frame (so shapes, wrap and reframing all
+ * apply) over its stored poster: 'auto' loops silently while on screen, 'click' shows a play button.
  */
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useImageUrl } from '@/lib/db'
 import { useStore } from '@/model/store'
-import { IMAGE_ZOOM, PITCH, type ImageBlock as ImageBlockT } from '@/model/types'
+import { IMAGE_ZOOM, PITCH, type ImageBlock as ImageBlockT, type VideoPlayback } from '@/model/types'
 import { S } from '@/copy/strings'
 import { updateBlock } from '../ops'
 import type { EditorSession } from '../session'
@@ -53,8 +55,10 @@ function panTravel(block: ImageBlockT, boxW: number, boxH: number) {
 export const ImageBlockView = memo(function ImageBlockView({ block, quality, session, selected }: ImageBlockProps) {
   const ref = useRef<HTMLDivElement>(null)
   const id = block.id
+  const video = block.media === 'video'
   const thumb = useImageUrl(block.imageId, 'thumb')
-  const full = useImageUrl(quality === 'full' ? block.imageId : undefined, 'full')
+  // a video needs the file itself on every page it is shown on — the thumb is only its poster
+  const full = useImageUrl(quality === 'full' || video ? block.imageId : undefined, 'full')
   const cropping = useStore(st => (session ? st.croppingBlockId === id : false))
 
   // The import publishes the original first and swaps in the thumb and the full-size copy as they
@@ -65,7 +69,7 @@ export const ImageBlockView = memo(function ImageBlockView({ block, quality, ses
   const shown = useRef('')
   shown.current = src
   useEffect(() => {
-    if (!best) { setSrc(''); return }
+    if (!best || video) { setSrc(''); return }
     if (!shown.current) { setSrc(best); return }
     let alive = true
     const im = new Image()
@@ -73,7 +77,7 @@ export const ImageBlockView = memo(function ImageBlockView({ block, quality, ses
     const done = () => { if (alive) setSrc(best) }
     im.decode().then(done, done)
     return () => { alive = false }
-  }, [best])
+  }, [best, video])
 
   useLayoutEffect(() => {
     const el = ref.current
@@ -182,16 +186,20 @@ export const ImageBlockView = memo(function ImageBlockView({ block, quality, ses
       data-frame={block.frame === 'polaroid' ? 'polaroid' : undefined}
       data-selected={selected || undefined}
       data-crop={cropping || undefined}
-      data-loading={src ? undefined : '1'}
+      data-loading={(video ? thumb || full : src) ? undefined : '1'}
+      data-media={video ? 'video' : undefined}
       style={style}
-      role={session ? 'img' : undefined}
-      aria-label={session ? block.alt || S.editor.a11y.imageBlock : undefined}
+      role={session && !video ? 'img' : undefined}
+      aria-label={session ? block.alt || (video ? S.editorChrome.image.video.label : S.editor.a11y.imageBlock) : undefined}
       onPointerDown={cropping ? onPointerDown : undefined}
       onPointerMove={cropping ? onPointerMove : undefined}
       onPointerUp={cropping ? endDrag : undefined}
       onPointerCancel={cropping ? endDrag : undefined}
       onWheel={cropping ? onWheel : undefined}
     >
+      {video && (
+        <VideoFace src={full} poster={thumb} playback={block.playback ?? 'auto'} pos={pos} />
+      )}
       {src && (
         <img
           className="ed-img"
@@ -205,3 +213,75 @@ export const ImageBlockView = memo(function ImageBlockView({ block, quality, ses
     </div>
   )
 })
+
+/**
+ * The moving picture. Playback is always started from script, never the autoplay attribute: the
+ * book clones page DOM for its flip strips, and a cloned autoplay video would start on its own.
+ * 'auto' plays muted and looped, and only while on screen; 'click' plays once with sound.
+ */
+function VideoFace({ src, poster, playback, pos }: { src: string; poster: string; playback: VideoPlayback; pos?: { x: number; y: number } }) {
+  const ref = useRef<HTMLVideoElement>(null)
+  const [playing, setPlaying] = useState(false)
+  const auto = playback === 'auto'
+  const C = S.editorChrome.image.video
+
+  useEffect(() => {
+    const v = ref.current
+    if (!v || !src) return
+    v.muted = auto
+    v.loop = auto
+    if (!auto) { v.pause(); return }
+    const io = new IntersectionObserver(([en]) => {
+      if (en?.isIntersecting) void v.play().catch(() => { /* blocked or detached: the poster stays */ })
+      else v.pause()
+    })
+    io.observe(v)
+    return () => { io.disconnect(); v.pause() }
+  }, [auto, src])
+
+  const toggle = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    const v = ref.current
+    if (!v) return
+    if (!v.paused) { v.pause(); return }
+    // if the browser won't allow sound yet, play silently rather than not at all
+    v.muted = false
+    void v.play().catch(() => { v.muted = true; return v.play() }).catch(() => {})
+  }
+
+  return (
+    <>
+      <video
+        ref={ref}
+        className="ed-img"
+        src={src || undefined}
+        poster={poster || undefined}
+        playsInline
+        muted
+        preload={auto ? 'auto' : 'metadata'}
+        disablePictureInPicture
+        style={pos ? { objectPosition: `${pos.x * 100}% ${pos.y * 100}%` } : undefined}
+        onPlay={() => setPlaying(true)}
+        onPause={() => setPlaying(false)}
+        onEnded={e => { setPlaying(false); e.currentTarget.currentTime = 0 }}
+      />
+      {!auto && (
+        <button
+          type="button"
+          className="ed-vid-play"
+          data-media-control
+          data-playing={playing || undefined}
+          aria-label={playing ? C.pause : C.play}
+          onPointerDown={e => e.stopPropagation()}
+          onClick={toggle}
+        >
+          <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+            {playing
+              ? <path d="M8 6h2.6v12H8zM13.4 6H16v12h-2.6z" fill="currentColor" />
+              : <path d="M8.5 5.8v12.4a.6.6 0 0 0 .9.5l9.7-6.2a.6.6 0 0 0 0-1L9.4 5.3a.6.6 0 0 0-.9.5z" fill="currentColor" />}
+          </svg>
+        </button>
+      )}
+    </>
+  )
+}

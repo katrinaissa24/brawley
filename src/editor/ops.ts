@@ -6,20 +6,23 @@
 import { nanoid } from '@/lib/ids'
 import { newPage } from '@/model/store'
 import {
-  CONTENT, DEFAULT_IMAGE_W, MIN_BLOCK, MIN_TEXT_W, PAGE_MARGIN, PITCH,
+  COVER_PAGE, CONTENT, DEFAULT_IMAGE_W, MIN_BLOCK, MIN_TEXT_W, PAGE_MARGIN, PITCH,
   type Block, type Entry, type Id, type ImageBlock, type Page, type StickerBlock, type StickerSource, type TextBlock, type TextKind,
 } from '@/model/types'
 import { CONTENT_MAX_X, CONTENT_MAX_Y, clampCells, type CellRect, type PxRect } from './snap'
 import { EMPTY_HTML } from './sanitize'
 
-export const pageOf = (e: Entry, pi: number): Page | undefined => e.pages[pi]
-export const blockOf = (e: Entry, pi: number, id: Id): Block | undefined => e.pages[pi]?.blocks.find(b => b.id === id)
+const NO_DESIGN: Page = { id: 'cover', blocks: [] }
+/** The page at an index; COVER_PAGE is the front cover's design (empty until something is put on it). */
+export const pageOf = (e: Entry, pi: number): Page | undefined => (pi === COVER_PAGE ? e.cover.design ?? NO_DESIGN : e.pages[pi])
+export const blockOf = (e: Entry, pi: number, id: Id): Block | undefined => pageOf(e, pi)?.blocks.find(b => b.id === id)
 
 export function withPage(e: Entry, pi: number, fn: (p: Page) => Page): Entry {
-  const p = e.pages[pi]
+  const p = pageOf(e, pi)
   if (!p) return e
   const np = fn(p)
   if (np === p) return e
+  if (pi === COVER_PAGE) return { ...e, cover: { ...e.cover, design: np.blocks.length ? np : undefined } }
   const pages = e.pages.slice()
   pages[pi] = np
   return { ...e, pages }
@@ -148,6 +151,7 @@ export function continueOnNextPage(e: Entry, pi: number, fromId: Id, keepHtml: s
   }
   const src = blockOf(e, pi, fromId) as TextBlock | undefined
   const block = newTextBlock('body', src?.x ?? PAGE_MARGIN, PAGE_MARGIN, src?.w ?? CONTENT.cols, movedHtml || EMPTY_HTML)
+  if (src?.font) block.font = src.font // the continuation keeps its typeface
   entry = addBlock(entry, page, block)
   return { entry, page, id: block.id }
 }

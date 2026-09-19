@@ -1,6 +1,6 @@
 /** Book context menu: Open, Edit page 1, Cover…, Change date…, Duplicate, Remove (undo toast). */
 import { useEffect, useRef } from 'react'
-import type { Block, Entry, Id, Rect } from '@/model/types'
+import type { Block, Entry, Id, Page, Rect } from '@/model/types'
 import { useEntry, useStore } from '@/model/store'
 import { db } from '@/lib/db'
 import { nanoid } from '@/lib/ids'
@@ -83,7 +83,8 @@ export async function duplicateEntry(id: Id): Promise<Entry | null> {
   // pictures belong to an entry (db.deleteEntry removes them by entryId), so the copy gets its own
   const wanted = new Set<Id>()
   if (src.cover.imageId) wanted.add(src.cover.imageId)
-  for (const p of src.pages) for (const b of p.blocks) if (b.type === 'image') wanted.add(b.imageId)
+  const all = src.cover.design ? [...src.pages, src.cover.design] : src.pages
+  for (const p of all) for (const b of p.blocks) if (b.type === 'image') wanted.add(b.imageId)
   const map = new Map<Id, Id>()
   for (const imgId of wanted) {
     try {
@@ -96,13 +97,15 @@ export async function duplicateEntry(id: Id): Promise<Entry | null> {
       console.warn('picture not copied', err)
     }
   }
-  const pages = src.pages.map(p => ({
+  const copyPage = (p: Page): Page => ({
     id: nanoid(),
     blocks: p.blocks.map((b): Block => {
       const nb: Block = { ...b, id: nanoid() }
       return nb.type === 'image' ? { ...nb, imageId: map.get(nb.imageId) ?? nb.imageId } : nb
     }),
-  }))
+  })
+  const pages = src.pages.map(copyPage)
+  const design = src.cover.design ? copyPage(src.cover.design) : undefined
   const coverImage = src.cover.imageId ? map.get(src.cover.imageId) : undefined
   useStore.getState().updateEntry(
     copy.id,
@@ -110,7 +113,7 @@ export async function duplicateEntry(id: Id): Promise<Entry | null> {
       ...e,
       title: src.title ? src.title + S.ui.context.copySuffix : '',
       pages,
-      cover: { ...src.cover, imageId: coverImage },
+      cover: { ...src.cover, imageId: coverImage, design },
       lastOpenedPage: 0,
     }),
     { silent: true },

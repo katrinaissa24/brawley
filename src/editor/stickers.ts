@@ -11,7 +11,12 @@ export const STICKERS = [
   { id: 'washi-terracotta', name: N['washi-terracotta'], w: 9, h: 2, opacity: 0.82, rot: [-2, 2] },
   { id: 'washi-sage-dots', name: N['washi-sage-dots'], w: 9, h: 2, opacity: 0.82, rot: [-2, 2] },
   { id: 'washi-mustard', name: N['washi-mustard'], w: 9, h: 2, opacity: 0.82, rot: [-2, 2] },
+  { id: 'washi-plum-check', name: N['washi-plum-check'], w: 9, h: 2, opacity: 0.82, rot: [-2, 2] },
   { id: 'paper-clip', name: N['paper-clip'], w: 2, h: 5, rot: [-8, 8] },
+  { id: 'push-pin', name: N['push-pin'], w: 3, h: 3, rot: [-14, 14] },
+  { id: 'sticky-note', name: N['sticky-note'], w: 5, h: 5, rot: [-5, 5] },
+  { id: 'ribbon-bookmark', name: N['ribbon-bookmark'], w: 2, h: 5, rot: [-3, 3] },
+  { id: 'ticket', name: N.ticket, w: 6, h: 3, rot: [-4, 4] },
   { id: 'star', name: N.star, w: 3, h: 3, rot: [-10, 10] },
   { id: 'star-cluster', name: N['star-cluster'], w: 5, h: 3, rot: [-6, 6] },
   { id: 'heart', name: N.heart, w: 3, h: 3, rot: [-8, 8] },
@@ -23,7 +28,14 @@ export const STICKERS = [
   { id: 'coffee-ring', name: N['coffee-ring'], w: 6, h: 6, opacity: 0.35, rot: [0, 360] },
   { id: 'date-stamp', name: N['date-stamp'], w: 8, h: 3, rot: [-3, 3] },
   { id: 'sun', name: N.sun, w: 3, h: 3, rot: [0, 30] },
+  { id: 'moon', name: N.moon, w: 3, h: 3, rot: [-18, 18] },
+  { id: 'cloud', name: N.cloud, w: 5, h: 3, rot: [-3, 3] },
   { id: 'leaf', name: N.leaf, w: 3, h: 4, rot: [-12, 12] },
+  { id: 'flower', name: N.flower, w: 3, h: 3, rot: [0, 360] },
+  { id: 'sparkles', name: N.sparkles, w: 3, h: 3, rot: [-12, 12] },
+  { id: 'tick', name: N.tick, w: 3, h: 3, rot: [-10, 10] },
+  { id: 'speech-bubble', name: N['speech-bubble'], w: 5, h: 4, rot: [-4, 4] },
+  { id: 'quote-mark', name: N['quote-mark'], w: 3, h: 3, rot: [-6, 6] },
 ] as const
 
 export type StickerId = (typeof STICKERS)[number]['id']

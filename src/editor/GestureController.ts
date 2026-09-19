@@ -5,7 +5,8 @@
  * overlay, the alignment hairlines, the size badge and the dot-mask position; the store is
  * committed exactly once on pointerup (a drag is one undo step). Snapping is the hysteresis
  * magnet in snap.ts (5px in / 7px out, 0.35/frame ease while snapped; Alt disables; Shift
- * constrains the axis / frees the aspect / steps rotation). Text blocks move only via their grab
+ * constrains the axis / frees the aspect / steps rotation; rotation detents every 15°, from the
+ * ring above the frame or from any corner's rotate zone). Text blocks move only via their grab
  * handle or their selected frame; a plain click in text places the caret and never reaches here.
  * Keyboard nudge / delete / duplicate / reorder live here too so PageEditor just forwards keys.
  */
@@ -15,7 +16,7 @@ import { sound } from '@/feel/sound'
 import { useStore } from '@/model/store'
 import { CONTENT, MIN_BLOCK, MIN_TEXT_W, PITCH, type Block, type Id, type ImageBlock, type TextBlock } from '@/model/types'
 import { S } from '@/copy/strings'
-import { addBlock, cellFloorAt, duplicateBlock, newBodyAt, removeBlock, reorderBlock, textBlocks, updateBlock } from './ops'
+import { addBlock, cellFloorAt, duplicateBlock, newBodyAt, removeBlock, reorderBlock, textBlocks, updateBlock, withBlocks } from './ops'
 import type { EditorSession, LiveRects } from './session'
 import { clampCells, clampPosPx, guidesFrom, intersects, magnetStep, nearestGuide, newAxis, type AxisMagnet, type Guides, type PxRect } from './snap'
 import type { Handle } from './SelectionOverlay'
@@ -96,6 +97,7 @@ export class GestureController {
   private onDown = (e: PointerEvent) => {
     if (e.button !== 0 || this.g) return
     const t = e.target as HTMLElement
+    if (t.closest('[data-media-control]')) return // a video's play button is a button, not a grip
     const handleEl = t.closest<HTMLElement>('[data-handle]')
     let id: string | undefined
     let handle: GHandle | null = null
@@ -223,13 +225,14 @@ export class GestureController {
       let rot = g.startRot + deg(Math.atan2(p.y - cy, p.x - cx)) - g.startAngle
       rot = ((rot + 540) % 360) - 180
       if (L.shift) rot = Math.round(rot / 15) * 15
-      else if (!L.alt) { const near = Math.round(rot / 15) * 15; if (Math.abs(rot - near) < 4) rot = near }
+      else if (snap) { const near = Math.round(rot / 15) * 15; if (Math.abs(rot - near) < 4) rot = near }
       const prevRot = g.rot
       g.rot = Math.round(rot * 10) / 10
       g.el!.style.setProperty('--rot', g.rot + 'deg')
       this.session.selEl?.style.setProperty('--rot', g.rot + 'deg')
       this.badge(g, S.editor.rotation(g.rot))
-      if (Math.round(prevRot / 15) !== Math.round(g.rot / 15) && Math.abs(g.rot % 15) < 0.01) this.click()
+      // one detent per 15° step crossed — the same tick a move makes per grid cell
+      if (snap && Math.floor(prevRot / 15) !== Math.floor(g.rot / 15)) this.click()
     }
     // dots wake up around the pointer
     const pp = this.pagePoint(L.cx, L.cy, g)
@@ -546,23 +549,19 @@ export class GestureController {
       })
       sound.whump()
       const first = gone[0].block!
-      const msg = gone.length > 1 ? S.editor.removed.text : first.type === 'image' ? S.editor.removed.image : first.type === 'sticker' ? S.editor.removed.sticker : S.editor.removed.text
+      const msg = gone.length > 1 ? S.editor.removed.text : first.type === 'image' ? (first.media === 'video' ? S.editor.removed.video : S.editor.removed.image) : first.type === 'sticker' ? S.editor.removed.sticker : S.editor.removed.text
       useStore.getState().toast(msg, {
         undo: () => {
           const s = this.session
           for (const x of gone) s.justAdded.add(x.id)
-          s.commit(e => {
-            const p = e.pages[pi]
-            if (!p) return e
-            const blocks = p.blocks.slice()
+          s.commit(e => withBlocks(e, pi, cur => {
+            const blocks = cur.slice()
             for (const x of gone.slice().sort((a, b) => a.index - b.index)) {
               if (blocks.some(b => b.id === x.id)) continue
               blocks.splice(Math.min(x.index, blocks.length), 0, x.block!)
             }
-            const pages = e.pages.slice()
-            pages[pi] = { ...p, blocks }
-            return { ...e, pages }
-          })
+            return blocks
+          }))
           useStore.getState().select(gone.map(x => x.id))
         },
       })

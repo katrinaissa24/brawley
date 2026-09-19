@@ -12,15 +12,17 @@ import { S } from '@/copy/strings'
 import { MOTION } from '@/feel/motion'
 import { sound } from '@/feel/sound'
 import { formatLong } from '@/lib/dates'
+import { isMediaFile, useImageUrl } from '@/lib/db'
+import { HUES, INK, coverHex, inkFor } from '@/model/palette'
 import { useEntry, useStore } from '@/model/store'
-import { CONTENT, PAGE, PAGE_MARGIN, PITCH, type Entry, type Id, type Rect, type StickerSource, type TextBlock, type TextKind } from '@/model/types'
+import { CONTENT, COVER_PAGE, PAGE, PAGE_MARGIN, PITCH, type Entry, type Id, type Rect, type StickerSource, type TextBlock, type TextFont, type TextKind } from '@/model/types'
 import { BubbleToolbar } from './BubbleToolbar'
 import { DocumentView } from './DocumentView'
 import { ImageToolbar } from './ImageToolbar'
 import { InsertRail } from './InsertRail'
 import { hourSlot, splitAtOverflow } from './blocks/TextBody'
 import { selectionRect } from './caret'
-import { addBlock, addPageAfter, continueOnNextPage, firstFreeRow, newStickerBlock, newTextBlock, readingOrder, textBlocks, updateBlock } from './ops'
+import { addBlock, addPageAfter, pageOf, continueOnNextPage, firstFreeRow, newStickerBlock, newTextBlock, readingOrder, textBlocks, updateBlock } from './ops'
 import { sanitizeHtml } from './sanitize'
 import { EditorSession } from './session'
 import { CONTENT_MAX_X, CONTENT_MAX_Y } from './snap'
@@ -39,7 +41,8 @@ export function PageEditor() {
   const route = useStore(s => s.route)
   const entry = useEntry(route.view === 'editor' ? route.entryId : null)
   if (route.view !== 'editor' || !entry) return null
-  const pageIndex = Math.max(0, Math.min(route.pageIndex, entry.pages.length - 1))
+  // COVER_PAGE edits the front cover's design; everything else is clamped to a real page
+  const pageIndex = route.pageIndex === COVER_PAGE ? COVER_PAGE : Math.max(0, Math.min(route.pageIndex, entry.pages.length - 1))
   return <Editor key={entry.id} entry={entry} pageIndex={pageIndex} routeIndex={route.pageIndex} />
 }
 
@@ -52,7 +55,8 @@ function Editor({ entry, pageIndex, routeIndex }: { entry: Entry; pageIndex: num
   const selection = useStore(s => s.selection)
   const editingId = useStore(s => s.editingBlockId)
   const cropping = useStore(s => s.croppingBlockId)
-  const page = entry.pages[pageIndex]
+  const isCover = pageIndex === COVER_PAGE
+  const page = pageOf(entry, pageIndex)!
   const blocks = page.blocks
 
   const [scale, setScale] = useState(fitScale)
@@ -137,8 +141,8 @@ function Editor({ entry, pageIndex, routeIndex }: { entry: Entry; pageIndex: num
   useEffect(() => {
     const t = window.setTimeout(() => {
       const e = session.entry()
-      const p = e?.pages[session.pageIndex]
-      if (!e || !p) return
+      const p = e && pageOf(e, session.pageIndex)
+      if (!e || !p || session.pageIndex === COVER_PAGE) return // a cover starts bare
       const texts = readingOrder(textBlocks(p.blocks))
       if (!p.blocks.length) {
         const nb = newTextBlock('body', PAGE_MARGIN, PAGE_MARGIN, CONTENT.cols)
@@ -200,7 +204,7 @@ function Editor({ entry, pageIndex, routeIndex }: { entry: Entry; pageIndex: num
   const go = useCallback((d: -1 | 1) => {
     const n = pageIndex + d
     const e = session.entry()
-    if (!e || n < 0 || n >= e.pages.length) return
+    if (!e || pageIndex === COVER_PAGE || n < 0 || n >= e.pages.length) return
     session.flushAll()
     setDir(d)
     useStore.getState().openPage(entry.id, n)
@@ -208,7 +212,7 @@ function Editor({ entry, pageIndex, routeIndex }: { entry: Entry; pageIndex: num
   const addPage = useCallback(() => {
     session.flushAll()
     const e = session.entry()
-    if (!e) return
+    if (!e || pageIndex === COVER_PAGE) return
     const r = addPageAfter(e, pageIndex)
     useStore.getState().commitEntry(r.entry)
     setDir(1)
@@ -254,7 +258,7 @@ function Editor({ entry, pageIndex, routeIndex }: { entry: Entry; pageIndex: num
       const inEditable = !!t && (t.isContentEditable || t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT')
       const st = useStore.getState()
       const meta = e.metaKey || e.ctrlKey
-      if (t && t.closest && t.closest('.ed-stickers')) return // the sticker picker owns its keys
+      if (t && t.closest && t.closest('.ed-stickers, .ed-stkmaker')) return // the sticker picker owns its keys
       if (e.key === 'Escape') {
         if (st.popover) return
         if (t === titleRef.current) { e.preventDefault(); titleRef.current?.blur(); return }
@@ -310,7 +314,7 @@ function Editor({ entry, pageIndex, routeIndex }: { entry: Entry; pageIndex: num
       const t = e.target as HTMLElement | null
       if (t && (t.isContentEditable || t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return
       if (useStore.getState().popover) return
-      const files = Array.from(e.clipboardData?.files ?? []).filter(f => f.type.startsWith('image/'))
+      const files = Array.from(e.clipboardData?.files ?? []).filter(isMediaFile)
       if (files.length) { e.preventDefault(); void importFiles(files); return }
       const html = e.clipboardData?.getData('text/html') ?? ''
       const text = e.clipboardData?.getData('text/plain') ?? ''
@@ -362,7 +366,7 @@ function Editor({ entry, pageIndex, routeIndex }: { entry: Entry; pageIndex: num
   const onDrop = (e: React.DragEvent) => {
     if (!e.dataTransfer.types.includes('Files')) return
     e.preventDefault()
-    const files = Array.from(e.dataTransfer.files).filter(f => f.type.startsWith('image/'))
+    const files = Array.from(e.dataTransfer.files).filter(isMediaFile)
     const at = dropCell.current ?? undefined
     ghostOff()
     if (files.length) void importFiles(files, at)
@@ -470,7 +474,7 @@ function Editor({ entry, pageIndex, routeIndex }: { entry: Entry; pageIndex: num
     st.openPopover({ kind: 'cover', entryId: entry.id, anchor: r ? { x: r.left - 64, y: r.top + r.height / 2 - 22, w: 44, h: 44 } : { x: 48, y: window.innerHeight / 2, w: 44, h: 44 } })
   }, [entry.id])
   const onFiles = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files ?? []).filter(f => f.type.startsWith('image/'))
+    const files = Array.from(e.target.files ?? []).filter(isMediaFile)
     e.target.value = ''
     const id = replaceFor.current
     replaceFor.current = null
@@ -486,6 +490,13 @@ function Editor({ entry, pageIndex, routeIndex }: { entry: Entry; pageIndex: num
     if (!id) return
     session.flushers.get(id)?.()
     session.commit(e => updateBlock<TextBlock>(e, session.pageIndex, id, { kind: k }))
+    session.textEls.get(id)?.focus({ preventScroll: true })
+  }, [bubble?.id, session])
+  const onFont = useCallback((f: TextFont) => {
+    const id = bubble?.id
+    if (!id) return
+    session.flushers.get(id)?.()
+    session.commit(e => updateBlock<TextBlock>(e, session.pageIndex, id, { font: f === 'serif' ? undefined : f }))
     session.textEls.get(id)?.focus({ preventScroll: true })
   }, [bubble?.id, session])
   const onFormat = useCallback((cmd: Parameters<NonNullable<ReturnType<EditorSession['formatFns']['get']>>>[0]) => {
@@ -522,6 +533,7 @@ function Editor({ entry, pageIndex, routeIndex }: { entry: Entry; pageIndex: num
   const n = entry.stats.words
   const stageW = Math.round(PAGE.w * scale)
   const stageH = Math.round(PAGE.h * scale)
+  const pageLabel = isCover ? E.coverPage : E.pageOf(pageIndex + 1, entry.pages.length)
 
   return (
     <div
@@ -565,22 +577,23 @@ function Editor({ entry, pageIndex, routeIndex }: { entry: Entry; pageIndex: num
           <button
             type="button"
             className={'ed-pageno' + (words ? ' is-words' : '')}
-            aria-label={words ? E.a11y.wordCount : E.pageOf(pageIndex + 1, entry.pages.length)}
+            aria-label={words ? E.a11y.wordCount : pageLabel}
             onPointerDown={pressStart}
             onPointerUp={pressEnd}
             onPointerLeave={pressEnd}
             onPointerCancel={pressEnd}
             onContextMenu={e => e.preventDefault()}
           >
-            {words ? E.words(n, Math.ceil(n / 200)) : E.pageOf(pageIndex + 1, entry.pages.length)}
+            {words ? E.words(n, Math.ceil(n / 200)) : pageLabel}
           </button>
         </div>
       </header>
 
       <div className="ed-scroll">
         <div ref={stageRef} className="ed-stage" style={{ width: stageW, height: stageH }}>
-          <div ref={pageRef} className="ed-page" data-editor-page aria-label={E.a11y.page}>
+          <div ref={pageRef} className="ed-page" data-editor-page data-cover={isCover || undefined} aria-label={isCover ? E.coverPage : E.a11y.page} style={isCover ? coverStyle(entry) : undefined}>
             <div ref={scaledRef} className="ed-scaled" style={{ transform: `scale(${scale})` }}>
+              {isCover && <CoverBackdrop entry={entry} />}
               <div className="ed-dots" aria-hidden="true" />
               <div className="ed-dots ed-dots--hot" aria-hidden="true" />
               <div key={pageIndex} className="ed-slide" style={{ '--dir': dir } as React.CSSProperties}>
@@ -600,7 +613,7 @@ function Editor({ entry, pageIndex, routeIndex }: { entry: Entry; pageIndex: num
           <div ref={railRef} className="ed-rail-slot">
             <InsertRail onAddText={onAddText} onAddImage={onAddImage} onAddSticker={addSticker} onCover={onCover} />
           </div>
-          {overflowIds.length > 0 && (
+          {overflowIds.length > 0 && !isCover && (
             <div className="ed-overflow" role="status">
               <span className="ed-overflow__label">{E.overflow.label}</span>
               <button type="button" className="ed-overflow__btn" onClick={continueNext}>{E.overflow.action}</button>
@@ -610,7 +623,7 @@ function Editor({ entry, pageIndex, routeIndex }: { entry: Entry; pageIndex: num
       </div>
 
       {bubble && bubbleBlock && bubbleBlock.type === 'text' && !gesture && (
-        <BubbleToolbar anchor={bubble.anchor} kind={bubbleBlock.kind} onKind={onKind} onFormat={onFormat} />
+        <BubbleToolbar anchor={bubble.anchor} kind={bubbleBlock.kind} onKind={onKind} font={bubbleBlock.font ?? 'serif'} onFont={onFont} onFormat={onFormat} />
       )}
       {imageSel && imageSel.type === 'image' && imgAnchor && !gesture && (
         <ImageToolbar
@@ -631,7 +644,7 @@ function Editor({ entry, pageIndex, routeIndex }: { entry: Entry; pageIndex: num
           onRemove={() => session.controller?.remove([imageSel.id])}
         />
       )}
-      <input ref={fileRef} type="file" accept="image/*" multiple hidden tabIndex={-1} aria-hidden="true" onChange={onFiles} />
+      <input ref={fileRef} type="file" accept="image/*,video/*" multiple hidden tabIndex={-1} aria-hidden="true" onChange={onFiles} />
     </div>
   )
 }
@@ -646,6 +659,24 @@ function SaveDot({ state }: { state: 'idle' | 'pending' | 'saving' | 'saved' | '
     )
   }
   return <span className="ed-savedot" data-state={state} title={label || undefined} role="status" aria-label={label || S.editor.a11y.autosave} />
+}
+
+/** The cover's colour, as the cover editor's page background. */
+function coverStyle(entry: Entry): React.CSSProperties {
+  const hex = coverHex(entry.cover)
+  return { '--cover-hex': hex, '--cover-deep': HUES[entry.cover.hue][2], '--cover-ink': INK[inkFor(hex)] } as React.CSSProperties
+}
+
+/** What the design sits on: the cover picture and the title band, exactly where the book draws them. */
+function CoverBackdrop({ entry }: { entry: Entry }) {
+  const img = useImageUrl(entry.cover.imageId, 'full')
+  const title = entry.title.trim()
+  return (
+    <div className="ed-coverbg" aria-hidden="true">
+      {img && <img className="ed-coverbg__img" src={img} alt="" draggable={false} />}
+      <div className={'ed-coverbg__band' + (title ? '' : ' -empty')}>{title || S.book.untitled}</div>
+    </div>
+  )
 }
 
 const escapeHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')

@@ -87,6 +87,7 @@ export const TextBlockView = memo(function TextBlockView({ block, images, images
       data-id={id}
       data-type="text"
       data-kind={block.kind}
+      data-font={block.font && block.font !== 'serif' ? block.font : undefined}
       data-align={block.align}
       data-selected={selected || undefined}
       data-editing={editing || undefined}

@@ -1,14 +1,17 @@
 /**
- * Sticker picker: a 320px paper popover with two tabs — Emoji (curated, searchable by keyword)
- * and Stickers (the 16 built-in SVGs in a 4×4 grid). Rendered into document.body beside its
+ * Sticker picker: a 320px paper popover with three tabs — Emoji (curated, searchable by keyword),
+ * Stickers (the built-in SVGs from stickers.ts, four to a row, scrolled) and Yours (stickers made
+ * from your own pictures, with a "Make a sticker" tile that opens the StickerMaker). Rendered into document.body beside its
  * anchor; click outside or Esc closes; focus is trapped while open and restored on close.
  */
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { S } from '@/copy/strings'
 import { sound } from '@/feel/sound'
-import { PITCH, type Rect, type StickerSource } from '@/model/types'
+import { db, useImageUrl } from '@/lib/db'
+import { PITCH, type CustomSticker, type Rect, type StickerSource } from '@/model/types'
 import { Sticker } from './Sticker'
+import { StickerMaker } from './StickerMaker'
 import { EMOJI_CELLS, STICKERS, type StickerDef } from './stickers'
 import './editor-chrome.css'
 
@@ -20,7 +23,8 @@ export interface StickerPickerProps {
   onClose(): void
 }
 
-type Tab = 'emoji' | 'stickers'
+type Tab = 'emoji' | 'stickers' | 'mine'
+const TABS: Tab[] = ['emoji', 'stickers', 'mine']
 let lastTab: Tab = 'emoji' // remembered across openings within the session
 
 export function StickerPicker(props: StickerPickerProps) {
@@ -90,6 +94,7 @@ function Panel({ anchor, onPick, onClose }: StickerPickerProps) {
     const onDown = (e: PointerEvent) => {
       const el = root.current
       if (!el || el.contains(e.target as Node)) return
+      if ((e.target as Element).closest?.('.ed-stkmaker')) return // the maker is ours, just portalled
       if (anchor && e.clientX >= anchor.x && e.clientX <= anchor.x + anchor.w && e.clientY >= anchor.y && e.clientY <= anchor.y + anchor.h) return
       onCloseRef.current()
     }
@@ -134,7 +139,8 @@ function Panel({ anchor, onPick, onClose }: StickerPickerProps) {
     if ((e.metaKey || e.ctrlKey) && !e.altKey) {
       if (e.key === 'ArrowRight' || e.key === 'ArrowLeft' || e.key === ']' || e.key === '[') {
         e.preventDefault()
-        switchTab(tab === 'emoji' ? 'stickers' : 'emoji')
+        const d = e.key === 'ArrowRight' || e.key === ']' ? 1 : -1
+        switchTab(TABS[(TABS.indexOf(tab) + d + TABS.length) % TABS.length])
       }
     }
   }
@@ -151,38 +157,34 @@ function Panel({ anchor, onPick, onClose }: StickerPickerProps) {
       onKeyDown={onKeyDown}
     >
       <div className="ed-stickers__tabs" role="tablist" aria-label={C.title}>
-        <button
-          type="button"
-          role="tab"
-          id="ed-stickers-tab-emoji"
-          className="ed-stickers__tab"
-          aria-selected={tab === 'emoji'}
-          aria-controls="ed-stickers-panel"
-          tabIndex={tab === 'emoji' ? 0 : -1}
-          onClick={() => switchTab('emoji')}
-          onKeyDown={e => { if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') { e.preventDefault(); switchTab('stickers') } }}
-        >
-          {C.emoji}
-        </button>
-        <button
-          type="button"
-          role="tab"
-          id="ed-stickers-tab-stickers"
-          className="ed-stickers__tab"
-          aria-selected={tab === 'stickers'}
-          aria-controls="ed-stickers-panel"
-          tabIndex={tab === 'stickers' ? 0 : -1}
-          onClick={() => switchTab('stickers')}
-          onKeyDown={e => { if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') { e.preventDefault(); switchTab('emoji') } }}
-        >
-          {C.stickers}
-        </button>
+        {TABS.map(t => (
+          <button
+            key={t}
+            type="button"
+            role="tab"
+            id={`ed-stickers-tab-${t}`}
+            className="ed-stickers__tab"
+            aria-selected={tab === t}
+            aria-controls="ed-stickers-panel"
+            tabIndex={tab === t ? 0 : -1}
+            onClick={() => switchTab(t)}
+            onKeyDown={e => {
+              if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return
+              e.preventDefault()
+              switchTab(TABS[(TABS.indexOf(t) + (e.key === 'ArrowRight' ? 1 : -1) + TABS.length) % TABS.length])
+            }}
+          >
+            {t === 'emoji' ? C.emoji : t === 'stickers' ? C.stickers : C.mine}
+          </button>
+        ))}
       </div>
       <div id="ed-stickers-panel" role="tabpanel" aria-labelledby={`ed-stickers-tab-${tab}`} className="ed-stickers__panel">
         {tab === 'emoji' ? (
           <EmojiTab query={query} setQuery={setQuery} inputRef={search} onPick={pick} />
-        ) : (
+        ) : tab === 'stickers' ? (
           <StickersTab onPick={pick} />
+        ) : (
+          <MineTab onPick={pick} />
         )}
       </div>
     </div>,
@@ -321,6 +323,96 @@ function StickersTab({ onPick }: { onPick(source: StickerSource, w: number, h: n
         </button>
       ))}
     </div>
+  )
+}
+
+/* ---------- your own stickers ---------- */
+
+/** Placed size of a custom sticker: its aspect, 7 cells on the longer side. */
+export function customCells(s: Pick<CustomSticker, 'width' | 'height'>) {
+  const long = 7
+  const r = s.width / Math.max(1, s.height)
+  return r >= 1 ? { w: long, h: Math.max(2, Math.round(long / r)) } : { w: Math.max(2, Math.round(long * r)), h: long }
+}
+
+function MineTab({ onPick }: { onPick(source: StickerSource, w: number, h: number): void }) {
+  const C = S.editorChrome.sticker
+  const [list, setList] = useState<CustomSticker[] | null>(null)
+  const [file, setFile] = useState<File | null>(null)
+  const input = useRef<HTMLInputElement>(null)
+  useEffect(() => { void db.listStickers().then(setList) }, [])
+
+  const place = (s: CustomSticker) => {
+    const { w, h } = customCells(s)
+    onPick({ type: 'image', imageId: s.imageId }, w, h)
+  }
+  const remove = async (s: CustomSticker) => {
+    await db.removeSticker(s.imageId)
+    setList(l => (l ? l.filter(x => x.imageId !== s.imageId) : l))
+  }
+
+  return (
+    <>
+      <div className="ed-stickers__grid ed-stickers__grid--svg ed-stickers__grid--mine" role="group" aria-label={C.mineGrid} onKeyDown={e => gridKeys(e, COLS_STICKERS)}>
+        <button
+          type="button"
+          className="ed-stickers__cell ed-stickers__make"
+          aria-label={C.make}
+          data-tip={C.make}
+          tabIndex={0}
+          style={{ width: CELL_W, height: CELL_H }}
+          onClick={() => input.current?.click()}
+        >
+          <svg width="20" height="20" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true">
+            <path d="M9 4v10M4 9h10" />
+          </svg>
+        </button>
+        {list?.map(s => (
+          <span key={s.imageId} className="ed-stickers__mine">
+            <button
+              type="button"
+              className="ed-stickers__cell ed-stickers__svg"
+              aria-label={C.yours}
+              tabIndex={-1}
+              style={{ width: CELL_W, height: CELL_H }}
+              onClick={() => place(s)}
+            >
+              <MinePreview s={s} />
+            </button>
+            <button type="button" className="ed-stickers__forget" aria-label={C.forget} data-tip={C.forget} tabIndex={-1} onClick={() => void remove(s)}>
+              <svg width="10" height="10" viewBox="0 0 10 10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true"><path d="M2.5 2.5l5 5M7.5 2.5l-5 5" /></svg>
+            </button>
+          </span>
+        ))}
+      </div>
+      {list && !list.length && <p className="ed-stickers__hint">{C.mineEmpty}</p>}
+      <input
+        ref={input}
+        type="file"
+        accept="image/*"
+        hidden
+        tabIndex={-1}
+        aria-hidden="true"
+        onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; if (f) setFile(f) }}
+      />
+      {file && (
+        <StickerMaker
+          file={file}
+          onCancel={() => setFile(null)}
+          onDone={s => { setFile(null); setList(l => [s, ...(l ?? [])]); place(s) }}
+        />
+      )}
+    </>
+  )
+}
+
+function MinePreview({ s }: { s: CustomSticker }) {
+  const url = useImageUrl(s.imageId, 'thumb')
+  const r = Math.min((CELL_W - PAD) / s.width, (CELL_H - PAD) / s.height)
+  return (
+    <span className="ed-stickers__preview" style={{ width: Math.round(s.width * r), height: Math.round(s.height * r) }}>
+      {url && <img src={url} alt="" draggable={false} style={{ width: '100%', height: '100%', objectFit: 'contain', display: 'block' }} />}
+    </span>
   )
 }
 

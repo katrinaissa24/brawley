@@ -16,7 +16,7 @@ import { ImageBlockView } from './blocks/ImageBlock'
 import { StickerBlockView } from './blocks/StickerBlock'
 import { TextBlockView } from './blocks/TextBlock'
 import { placeholderFor } from './blocks/TextBody'
-import { imageBlocks } from './ops'
+import { imageBlocks, pageOf } from './ops'
 import type { EditorSession } from './session'
 import { imagesWrapKey } from './wrap'
 import './editor.css'
@@ -40,7 +40,7 @@ export function DocumentView({ entry, pageIndex, mode, imageQuality = 'full', se
   const prompts = useStore(st => st.settings.prompts)
   const rootRef = useRef<HTMLDivElement>(null)
 
-  const page = entry.pages[pageIndex]
+  const page = pageOf(entry, pageIndex)
   const blocks = page?.blocks ?? []
   const images = useMemo(() => imageBlocks(blocks), [blocks])
   const imagesKey = useMemo(() => imagesWrapKey(images), [images])

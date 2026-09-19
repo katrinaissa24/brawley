@@ -7,6 +7,7 @@
  * so the app-level undo always sees the latest text. In view mode it is a plain div.
  */
 import { memo, useCallback, useEffect, useLayoutEffect, useRef } from 'react'
+import { isMediaFile } from '@/lib/db'
 import { useStore } from '@/model/store'
 import { PITCH, type Id, type TextBlock, type TextKind } from '@/model/types'
 import { S } from '@/copy/strings'
@@ -309,7 +310,7 @@ export const TextBody = memo(function TextBody({ block, session, placeholder, on
     e.preventDefault()
     const el = ref.current
     if (!el || !session) return
-    const files = Array.from(e.clipboardData.files).filter(f => f.type.startsWith('image/'))
+    const files = Array.from(e.clipboardData.files).filter(isMediaFile)
     if (files.length) { flush(); session.emit('import', files, latest.current.id); return }
     const html = e.clipboardData.getData('text/html')
     const text = e.clipboardData.getData('text/plain')
